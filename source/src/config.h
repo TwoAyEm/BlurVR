@@ -67,6 +67,8 @@ struct Config {
     int fitDesktopWindow = 1; // [Render] FitDesktopWindow: the game's window is never made bigger than the work area of its monitor (it is only a mirror of the headset)
     int desktopView = 1; // [Render] DesktopView: what the window on the desktop shows in a race: 1 = the left eye's view, 2 = the right eye's, 0 = the whole side-by-side picture
     int desktopPresentEvery = 1; // [Render] DesktopPresentEvery: in a race the game's window gets a real Present only every this many frames (1 = every frame as the game wants)
+    int cullHeadFrustum = 1; // [Culling] HeadFrustum: 1 = the game culls with a frustum around the head (both eyes' field of view, the head's orientation), game_camera.cpp
+    double cullMarginDeg = 6.0, cullPullBack = 0.3; // [Culling] MarginDeg (added to every side) and PullBack (metres the frustum's apex is moved back)
     int foveationReport = 1; // [Foveation] Report: at VR start, log how much of each eye's image the lenses can show (lens_model.cpp)
 };
 

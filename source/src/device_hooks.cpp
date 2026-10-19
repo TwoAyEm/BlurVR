@@ -7,6 +7,7 @@
 #include "display_modes.h"
 #include "draw_dispatch.h"
 #include "frame_limiter.h"
+#include "game_camera.h"
 #include "game_mode.h"
 #include "hud.h"
 #include "mirror_stereo.h"
@@ -77,6 +78,7 @@ static HRESULT STDMETHODCALLTYPE H_Present(IDirect3DDevice9* d, const RECT* a, c
         VrUpdatePose();
     }
     PerfPoll();
+    GameCameraPoll();
     return hr;
 }
 

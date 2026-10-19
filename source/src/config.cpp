@@ -87,6 +87,9 @@ void LoadConfig()
     g_cfg.startWidth = ReadIniInt("Render", "StartWidth", 0);
     g_cfg.startHeight = ReadIniInt("Render", "StartHeight", 0);
     g_cfg.foveationReport = ReadIniInt("Foveation", "Report", 1);
+    g_cfg.cullHeadFrustum = ReadIniInt("Culling", "HeadFrustum", 1);
+    g_cfg.cullMarginDeg = ReadIniDouble("Culling", "MarginDeg", 6.0);
+    g_cfg.cullPullBack = ReadIniDouble("Culling", "PullBack", 0.3);
     char buf[32];
     GetPrivateProfileStringA("Matrix", "Layout", "auto", buf, sizeof(buf), IniFilePath().c_str());
     g_cfg.matrixLayoutOverride = (!_stricmp(buf, "row")) ? 1 : (!_stricmp(buf, "transposed")) ? 2 : 0;

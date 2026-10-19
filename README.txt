@@ -1,4 +1,4 @@
-BlurVR 1.1 - seated VR for Blur (SteamVR / OpenVR)
+BlurVR 1.2 - seated VR for Blur (SteamVR / OpenVR)
 ==================================================
 Play Blur in a headset, seated. Built and tested with a Valve Index; any SteamVR headset should work.
 Unofficial fan mod; not affiliated with the game's publisher or developer.
@@ -129,6 +129,13 @@ Settings: BlurVR.ini holds only the options most people need (resolution, start 
   KeyMirror3D=0x66 (Num6)   KeyPerf=0x67 (Num7)   KeyDump=0x68 (Num8)   KeyVerticalTangents=0x69 (Num9)    keys for the switches above
   AdjustViewRotation=1
 
+[Culling]
+  HeadFrustum=1     1 = the game decides what to draw from a view frustum around your head (both eyes' field of view, the way you look)
+                    instead of from its own, narrower camera.  0 = as in 1.1.  Needs the Steam build of Blur.exe it was written for;
+                    any other build is left alone (the log says so).
+  MarginDeg=6.0     degrees added to every side of that frustum (covers canted displays and quick head turns)
+  PullBack=0.3      metres the frustum's apex is moved back (covers the eyes' offset and leaning)
+
 [Perf]
   Enabled=0         1 = write timing lines to the log once a second while racing (needs Log=1)
 
@@ -147,8 +154,7 @@ How it works (short)
   Source code: https://github.com/TwoAyEm/BlurVR (start with source/NOTES.md; build with source/build.bat on Windows or build.sh with Zig).
 
 Known limitations
-  * CULLING: the game picks what to draw with its own narrow camera frustum. Looking far away from the
-    direction of travel, objects outside that frustum may be missing.
+  * The rear-view mirror and the planar reflections still decide what to draw with the game's own cameras.
   * HUD detection is heuristic (worked out from how the game draws), so an unusual screen can show UI pieces in the wrong place.
   * Menus are the game image on a flat screen; use mouse/keyboard/controller as normal.
   * The window on the desktop is a mirror of one eye (DesktopView), cropped to the window's shape; it is not the headset's full view.
@@ -161,6 +167,19 @@ Troubleshooting
   Slow: lower CustomWidth/CustomHeight, or make sure SharedTransport=1. Num7 (or Enabled=1 under [Perf], with Log=1) writes timing lines to the log.
   If SharedTransport=1 gives odd textures or a black picture on your graphics card, set SharedTransport=0.
   To run the game flat, run uninstall.bat (or set Enabled=0 in BlurVR.ini).
+
+What is new in 1.2
+  * Objects no longer pop in and out at the edges of your view or when you look away from the direction of travel. The game decides
+    what to draw from its own camera, which is narrower than the headset's view and does not turn with your head (it is 60 degrees
+    tall; the Index shows 109). BlurVR now gives it a view frustum around your head, wide enough for both eyes (HeadFrustum, MarginDeg
+    and PullBack under [Culling]). Drawing more of the world can cost frame time: HeadFrustum=0 gives back the old behaviour.
+  * Quest 2 and other headsets that see further down than up: the upward and downward field of view were read swapped, which
+    squashed the periphery and bent lines when the head turned. Fixed (OldVerticalTangents=1 restores the old reading, Num9 switches
+    between the two for comparing).
+  * Each eye's position and rotation come from SteamVR (EyeTransform), which covers canted displays and IPD changes while playing.
+  * The camera position and the pixel shaders' camera now move with each eye, so highlights, reflections and the sky no longer slide
+    over surfaces when the head moves.
+    (The last three: pull request #2 by uKER.)
 
 What is new in 1.1
   * Much higher resolutions: the game runs on a Direct3D 9Ex device and gives SteamVR each frame as a shared texture, so the picture

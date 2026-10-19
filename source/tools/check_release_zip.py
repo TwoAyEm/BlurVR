@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Check a release zip made by make_release.py: the right files, and no source code in it.
 
-    python tools/check_release_zip.py ../dist/BlurVR-1.1.zip [tag]
+    python tools/check_release_zip.py ../dist/BlurVR-1.2.zip [tag]
 
-With a tag (v1.1) it also checks that the tag is 'v' + the version in src/core.h.  Exits 1 on any problem.
+With a tag (v1.2) it also checks that the tag is 'v' + the version in src/core.h.  Exits 1 on any problem.
 """
 import os
 import re
