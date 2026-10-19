@@ -3,8 +3,6 @@ BlurVR 1.1 - seated VR for Blur (SteamVR / OpenVR)
 Play Blur in a headset, seated. Built and tested with a Valve Index; any SteamVR headset should work.
 Unofficial fan mod; not affiliated with the game's publisher or developer.
 
-<iframe width="560" height="315" src="https://www.youtube.com/watch?v=-Gwqe6Wcjd8" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
-
 What it does
   MENUS : the game is shown on a floating screen in front of you (SteamVR overlay).
   RACES : true stereo 3D, seated. Your head moves the in-game camera (chase view and in-car view).
