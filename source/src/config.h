@@ -10,6 +10,8 @@ struct Config {
     int trackRotation = 1, trackPosition = 1;
     double positionScale = 1.0; // game units per metre
     double ipdScale = 1.0;
+    int oldVerticalTangents = 0; // [Tracking] OldVerticalTangents: 1 = read GetProjectionRaw's top/bottom the old (swapped) way
+    int eyeTransform = 1; // [Tracking] EyeTransform: each eye's pose from SteamVR's eye-to-head transform (rotation included); 0 = half the IPD along x
     int stereo = 1;
     double fovScale = 1.0;
     double mainPassMinWidthFraction = 0.9;
@@ -56,6 +58,7 @@ struct Config {
     int autoRecenter = 1; // 1 = recentre (SteamVR zero pose) every time a race starts; 0 = only on the recentre key
     int perfEnabled = 0;  // [Perf] Enabled: log GPU and CPU frame timing once a second (perf_probe.cpp); the key below flips it live
     int keyPerf = 0x67;   // numpad 7
+    int keyVerticalTangents = 0x69; // [Debug] KeyVerticalTangents, numpad 9: OldVerticalTangents on/off
     int keyDump = 0x68;   // [Debug] KeyDump, numpad 8: save the picture sent to the headset and the UI layers as .bmp files (frame_dump.cpp)
     int sharedTransport = 0; // [Render] SharedTransport: 1 = run the game on a Direct3D 9Ex device and hand the finished frame to SteamVR as a shared texture (no read back through the CPU)
     int startAtSavedSize = 1; // [Render] StartAtSavedSize: a windowed start that Windows clamped to the desktop gets the game's saved video mode as its back buffer (display_modes.cpp)

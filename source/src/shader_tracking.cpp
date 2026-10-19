@@ -74,7 +74,8 @@ void ParseVertexShaderConstants(const DWORD* fn, VertexShaderInfo* info, int id)
                 } else if (regCount == 3 && NamesEqual(name, "g_mView")) {
                     info->tracked.push_back({TK_View3x3, regIndex});
                     matched = true;
-                }
+                } else if (regCount == 1 && (NamesEqual(name, "g_vViewPosition") || NamesEqual(name, "g_vCameraPosition")))
+                    info->viewPositionReg = regIndex; // (stays in otherConstantNames: the streak test wants it there)
                 size_t nameLength = strlen(name);
                 if (nameLength > 3 && name[nameLength - 1] >= '0' && name[nameLength - 1] <= '3' &&
                     regCount == 1) { // g_vViewMatrix0..3 etc.
@@ -167,5 +168,26 @@ void ParsePixelShaderConstants(const DWORD* fn, PixelShaderInfo* info)
             info->viewRayScaleReg = constant.reg;
         else if (NamesEqual(constant.name.c_str(), "g_mLight"))
             info->lightMatrixReg = constant.reg;
+        if (constant.regSet != 2 /*D3DXRS_FLOAT4*/)
+            continue;
+        const char* name = constant.name.c_str();
+        size_t nameLength = constant.name.size();
+        if (constant.count == 1 && (NamesEqual(name, "g_vViewPositionPS") || NamesEqual(name, "g_vViewPosition"))) {
+            int slot = info->viewPositionRegs[0] < 0 ? 0 : 1;
+            if (info->viewPositionRegs[0] != (int)constant.reg)
+                info->viewPositionRegs[slot] = constant.reg;
+        } else if (nameLength > 3 && name[nameLength - 1] >= '0' && name[nameLength - 1] <= '3') {
+            // the four registers are consecutive (CCP_VIEW_MATRIX..CCP_VIEW_MATRIX_3); a shader may use only some of them
+            int index = name[nameLength - 1] - '0', base = (int)constant.reg - index;
+            std::string stem(name, nameLength - 1);
+            if (base >= 0 && NamesEqual(stem.c_str(), "g_vViewMatrix")) {
+                info->viewMatrixBase = base;
+                info->viewMatrixUsed |= 1u << index;
+            } else if (base >= 0 && NamesEqual(stem.c_str(), "g_vViewProjMatrix")) {
+                info->viewProjBase = base;
+                info->viewProjUsed |= 1u << index;
+            }
+        }
     }
+    info->eyeConstants = info->viewPositionRegs[0] >= 0 || info->viewMatrixBase >= 0 || info->viewProjBase >= 0;
 }

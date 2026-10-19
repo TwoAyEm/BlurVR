@@ -191,14 +191,100 @@ static bool EnsureFrameTexture(UINT w, UINT h)
     return true;
 }
 
+// GetEyeToHeadTransform returns a 48-byte struct by value: on 32-bit x86 the caller passes a hidden pointer to the result as
+// the first argument (the function hands it back in EAX), so it is called with that pointer spelled out.
+typedef HmdMatrix34_t*(__stdcall* PFN_EyeToHeadRaw)(HmdMatrix34_t*, EVREye);
+
+// Head space to eye space for one eye (row vectors, D3D's left-handed axes), from SteamVR's eye-to-head transform: on headsets
+// with canted displays it holds a rotation, and the eye's tangent box (GetProjectionRaw) is given in that rotated frame.  The
+// translation is scaled by IpdScale and PositionScale like the half IPD it replaces.  False when the runtime gives something that
+// is not a plain rigid transform with the eye within 10 cm of the head.
+static bool ReadHeadToEye(int eye, Matrix4& headToEye, double translation[3])
+{
+    HmdMatrix34_t m;
+    ((PFN_EyeToHeadRaw)(void*)g_vr.system->GetEyeToHeadTransform)(&m, (EVREye)eye);
+    double rotation[3][3];
+    for (int r = 0; r < 3; r++) {
+        for (int c = 0; c < 3; c++)
+            rotation[r][c] = m.m[r][c] * (((r == 2) ? -1.0 : 1.0) * ((c == 2) ? -1.0 : 1.0));
+        translation[r] = m.m[r][3] * (r == 2 ? -1.0 : 1.0);
+    }
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) {
+            double d = rotation[i][0] * rotation[j][0] + rotation[i][1] * rotation[j][1] + rotation[i][2] * rotation[j][2];
+            if (fabs(d - (i == j ? 1.0 : 0.0)) > 0.01)
+                return false;
+        }
+    if (sqrt(translation[0] * translation[0] + translation[1] * translation[1] + translation[2] * translation[2]) > 0.1)
+        return false;
+    // eye -> head is p_head = R p_eye + t (column vectors); head -> eye as a row-vector matrix is [R; -t R]
+    double scale = g_cfg.ipdScale * g_cfg.positionScale;
+    headToEye = Identity();
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            headToEye.m[i][j] = rotation[i][j];
+    for (int j = 0; j < 3; j++)
+        headToEye.m[3][j] = -scale * (translation[0] * rotation[0][j] + translation[1] * rotation[1][j] + translation[2] * rotation[2][j]);
+    return true;
+}
+
+static void LogEyeToHead()
+{
+    for (int eye = 0; eye < 2; eye++) {
+        HmdMatrix34_t m;
+        ((PFN_EyeToHeadRaw)(void*)g_vr.system->GetEyeToHeadTransform)(&m, (EVREye)eye);
+        Matrix4 headToEye;
+        double t[3];
+        bool usable = ReadHeadToEye(eye, headToEye, t);
+        // the eye's forward axis (-z in OpenVR) in head space: yaw > 0 = turned to the right, pitch > 0 = up
+        double fx = -m.m[0][2], fy = -m.m[1][2], fz = -m.m[2][2];
+        Log("eye %d to head: offset %.1f %.1f %.1f mm, forward yaw %.2f deg pitch %.2f deg, roll %.2f deg%s", eye,
+            m.m[0][3] * 1000.0, m.m[1][3] * 1000.0, m.m[2][3] * 1000.0, atan2(fx, -fz) * 57.29578,
+            atan2(fy, sqrt(fx * fx + fz * fz)) * 57.29578, atan2(m.m[1][0], m.m[1][1]) * 57.29578,
+            usable ? "" : " (not usable: half the IPD along x is used)");
+    }
+}
+
+// GetProjectionRaw's vertical tangents count +y downwards: OpenVR's own ComposeProjection maps the tangent `bottom` to the top of
+// the picture (y_ndc = (2 tan - (bottom + top)) / (bottom - top), tan = bottom -> +1), so `bottom` is how far the eye sees upwards
+// and `-top` how far down.  Reading them the other way round went unnoticed on headsets that see as far up as down (Vive, Index),
+// but a Quest 2 sees 44 degrees up and 55 down: the picture was rendered for 55 up / 44 down and shown as 44 / 55, which stretches
+// the lower half, squeezes the upper one and bends straight lines in the periphery as the head turns.
+static float g_rawTangents[2][4]; // left, right, top, bottom as GetProjectionRaw gave them
 static void SplitVerticalTangents(float top, float bottom, double& up, double& down)
 {
     if (top < bottom) {
-        up = -top;
-        down = bottom;
-    } else {
+        up = g_cfg.oldVerticalTangents ? -top : bottom;
+        down = g_cfg.oldVerticalTangents ? bottom : -top;
+    } else { // (a runtime that gives them with +y up)
         up = top;
         down = -bottom;
+    }
+}
+
+// The per-eye tangent boxes and everything built from them, from the raw tangents read at start-up.
+static void ComputeEyeBoxes(bool log)
+{
+    double fovScale = g_cfg.fovScale;
+    for (int eye = 0; eye < 2; eye++) {
+        const float* raw = g_rawTangents[eye];
+        double up, down;
+        SplitVerticalTangents(raw[2], raw[3], up, down);
+        g_vr.eyeBox[eye] = {raw[0] * fovScale, raw[1] * fovScale, up * fovScale, down * fovScale};
+        if (log)
+            Log("eye %d tangents l=%.3f r=%.3f up=%.3f down=%.3f (raw top %.3f bottom %.3f)", eye, raw[0], raw[1], up, down,
+                raw[2], raw[3]);
+    }
+    g_vr.unionBox = {fmin(g_vr.eyeBox[0].left, g_vr.eyeBox[1].left), fmax(g_vr.eyeBox[0].right, g_vr.eyeBox[1].right),
+                     fmax(g_vr.eyeBox[0].up, g_vr.eyeBox[1].up), fmax(g_vr.eyeBox[0].down, g_vr.eyeBox[1].down)};
+    for (int eye = 0; eye < 2; eye++) { // mono fallback: both eyes sample their part of the union image
+        const EyeBox& thisEye = g_vr.eyeBox[eye];
+        const EyeBox& unionOfEyes = g_vr.unionBox;
+        g_vr.monoBounds[eye].uMin = (float)((thisEye.left - unionOfEyes.left) / (unionOfEyes.right - unionOfEyes.left));
+        g_vr.monoBounds[eye].uMax =
+            (float)((thisEye.right - unionOfEyes.left) / (unionOfEyes.right - unionOfEyes.left));
+        g_vr.monoBounds[eye].vMin = (float)((unionOfEyes.up - thisEye.up) / (unionOfEyes.up + unionOfEyes.down));
+        g_vr.monoBounds[eye].vMax = (float)((unionOfEyes.up + thisEye.down) / (unionOfEyes.up + unionOfEyes.down));
     }
 }
 
@@ -270,32 +356,18 @@ bool VrInit()
     }
 
     // per-eye projection boxes
-    double fovScale = g_cfg.fovScale;
     for (int eye = 0; eye < 2; eye++) {
-        float tanLeft, tanRight, tanTop, tanBottom;
-        g_vr.system->GetProjectionRaw((EVREye)eye, &tanLeft, &tanRight, &tanTop, &tanBottom);
-        double up, down;
-        SplitVerticalTangents(tanTop, tanBottom, up, down);
-        g_vr.eyeBox[eye] = {tanLeft * fovScale, tanRight * fovScale, up * fovScale, down * fovScale};
-        Log("eye %d tangents l=%.3f r=%.3f up=%.3f down=%.3f", eye, tanLeft, tanRight, up, down);
+        float* raw = g_rawTangents[eye];
+        g_vr.system->GetProjectionRaw((EVREye)eye, &raw[0], &raw[1], &raw[2], &raw[3]);
     }
-    g_vr.unionBox = {fmin(g_vr.eyeBox[0].left, g_vr.eyeBox[1].left), fmax(g_vr.eyeBox[0].right, g_vr.eyeBox[1].right),
-                     fmax(g_vr.eyeBox[0].up, g_vr.eyeBox[1].up), fmax(g_vr.eyeBox[0].down, g_vr.eyeBox[1].down)};
-    for (int eye = 0; eye < 2; eye++) { // mono fallback: both eyes sample their part of the union image
-        const EyeBox& thisEye = g_vr.eyeBox[eye];
-        const EyeBox& unionOfEyes = g_vr.unionBox;
-        g_vr.monoBounds[eye].uMin = (float)((thisEye.left - unionOfEyes.left) / (unionOfEyes.right - unionOfEyes.left));
-        g_vr.monoBounds[eye].uMax =
-            (float)((thisEye.right - unionOfEyes.left) / (unionOfEyes.right - unionOfEyes.left));
-        g_vr.monoBounds[eye].vMin = (float)((unionOfEyes.up - thisEye.up) / (unionOfEyes.up + unionOfEyes.down));
-        g_vr.monoBounds[eye].vMax = (float)((unionOfEyes.up + thisEye.down) / (unionOfEyes.up + unionOfEyes.down));
-    }
+    ComputeEyeBoxes(true);
     ETrackedPropertyError propertyError = ETrackedPropertyError_TrackedProp_Success;
     float ipd = g_vr.system->GetFloatTrackedDeviceProperty(
         k_unTrackedDeviceIndex_Hmd, ETrackedDeviceProperty_Prop_UserIpdMeters_Float, &propertyError);
     if (propertyError == ETrackedPropertyError_TrackedProp_Success && ipd > 0.04f && ipd < 0.09f)
         g_vr.ipd = ipd;
     Log("IPD %.1f mm", g_vr.ipd * 1000.0);
+    LogEyeToHead();
     for (int i = 0; i < 3; i++)
         g_vr.eyeCameraDelta[i] = Identity();
 
@@ -477,10 +549,22 @@ void VrUpdatePose()
     }
     double halfIpd = 0.5 * g_vr.ipd * g_cfg.ipdScale * g_cfg.positionScale;
     g_vr.eyeCameraDelta[2] = headDelta;
-    g_vr.eyeCameraDelta[0] = headDelta;
-    g_vr.eyeCameraDelta[0].m[3][0] += halfIpd; // left eye sits at -half in head space: view-space shift +half
-    g_vr.eyeCameraDelta[1] = headDelta;
-    g_vr.eyeCameraDelta[1].m[3][0] -= halfIpd;
+    Matrix4 headToEye[2];
+    double eyeOffset[2][3];
+    if (g_cfg.eyeTransform && ReadHeadToEye(0, headToEye[0], eyeOffset[0]) && ReadHeadToEye(1, headToEye[1], eyeOffset[1])) {
+        // (read every frame: the IPD can change while playing)
+        for (int eye = 0; eye < 2; eye++)
+            g_vr.eyeCameraDelta[eye] = Multiply(headDelta, headToEye[eye]);
+        double dx = eyeOffset[1][0] - eyeOffset[0][0], dy = eyeOffset[1][1] - eyeOffset[0][1], dz = eyeOffset[1][2] - eyeOffset[0][2];
+        double ipd = sqrt(dx * dx + dy * dy + dz * dz);
+        if (ipd > 0.04 && ipd < 0.09)
+            g_vr.ipd = ipd;
+    } else {
+        g_vr.eyeCameraDelta[0] = headDelta;
+        g_vr.eyeCameraDelta[0].m[3][0] += halfIpd; // left eye sits at -half in head space: view-space shift +half
+        g_vr.eyeCameraDelta[1] = headDelta;
+        g_vr.eyeCameraDelta[1].m[3][0] -= halfIpd;
+    }
     g_vr.poseValid = true;
 }
 
@@ -526,6 +610,14 @@ static void PollSwitchKeys()
     if (perfDown && !perfWasDown)
         PerfToggle();
     perfWasDown = perfDown;
+    static bool verticalWasDown = false;
+    bool verticalDown = g_cfg.keyVerticalTangents && (GetAsyncKeyState(g_cfg.keyVerticalTangents) & 0x8000) != 0;
+    if (verticalDown && !verticalWasDown) {
+        g_cfg.oldVerticalTangents = g_cfg.oldVerticalTangents ? 0 : 1;
+        Log("switch: vertical tangents %s", g_cfg.oldVerticalTangents ? "as before (up and down swapped)" : "fixed");
+        ComputeEyeBoxes(true);
+    }
+    verticalWasDown = verticalDown;
 }
 
 bool VrShowEyeOnDesktop(IDirect3DDevice9* device, RECT* presented)

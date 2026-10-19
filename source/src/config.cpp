@@ -38,6 +38,8 @@ void LoadConfig()
     g_cfg.trackPosition = ReadIniInt("Tracking", "Position", 1);
     g_cfg.positionScale = ReadIniDouble("Tracking", "PositionScale", 1.0);
     g_cfg.ipdScale = ReadIniDouble("Tracking", "IpdScale", 1.0);
+    g_cfg.eyeTransform = ReadIniInt("Tracking", "EyeTransform", 1);
+    g_cfg.oldVerticalTangents = ReadIniInt("Tracking", "OldVerticalTangents", 0);
     g_cfg.stereo = ReadIniInt("Render", "Stereo", 1);
     g_cfg.forceNoVsync = ReadIniInt("Render", "ForceNoVSync", 1);
     g_cfg.maxFps = ReadIniInt("Render", "MaxFps", 0);
@@ -75,6 +77,7 @@ void LoadConfig()
     g_cfg.sharedTransport = ReadIniInt("Render", "SharedTransport", 0);
     g_cfg.perfEnabled = ReadIniInt("Perf", "Enabled", 0);
     g_cfg.keyPerf = ReadIniInt("Debug", "KeyPerf", 0x67);
+    g_cfg.keyVerticalTangents = ReadIniInt("Debug", "KeyVerticalTangents", 0x69);
     g_cfg.keyDump = ReadIniInt("Debug", "KeyDump", 0x68);
     g_cfg.startAtSavedSize = ReadIniInt("Render", "StartAtSavedSize", 1);
     g_cfg.coverageEvery = ReadIniInt("Hud", "CoverageEvery", 8);
