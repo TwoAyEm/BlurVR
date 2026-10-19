@@ -26,6 +26,10 @@ static CameraAxes g_mainAxes; // the main camera, as seen by the last main-pass 
 void NoteMainCameraAxes()
 {
     g_mainAxes = g_lastCameraAxes;
+    g_mainCamera.axes = g_lastCameraAxes;
+    g_mainCamera.xScale = g_projXScale;
+    g_mainCamera.yScale = g_projYScale;
+    g_mainCamera.valid = g_lastCameraAxes.valid;
 }
 
 bool IsMirrorScenePass()

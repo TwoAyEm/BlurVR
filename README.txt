@@ -1,4 +1,4 @@
-BlurVR 1.2 - seated VR for Blur (SteamVR / OpenVR)
+BlurVR 1.3 - seated VR for Blur (SteamVR / OpenVR)
 ==================================================
 Play Blur in a headset, seated. Built and tested with a Valve Index; any SteamVR headset should work.
 Unofficial fan mod; not affiliated with the game's publisher or developer.
@@ -14,7 +14,8 @@ What it does
   Game controls are unchanged.
 
 Requirements
-  Windows, SteamVR, Blur from Steam (32-bit), a graphics card that runs Direct3D 11 (any recent one).
+  Windows, SteamVR, Blur (32-bit; any version of the game should do, Steam or not, see "What is new in 1.3"), a graphics card that
+  runs Direct3D 11 (any recent one).
 
 Install
   1. Unzip so that the BlurVR folder sits inside your Blur folder (next to Blur.exe),
@@ -131,8 +132,10 @@ Settings: BlurVR.ini holds only the options most people need (resolution, start 
 
 [Culling]
   HeadFrustum=1     1 = the game decides what to draw from a view frustum around your head (both eyes' field of view, the way you look)
-                    instead of from its own, narrower camera.  0 = as in 1.1.  Needs the Steam build of Blur.exe it was written for;
-                    any other build is left alone (the log says so).
+                    instead of from its own, narrower camera.  0 = as in 1.1.  BlurVR finds the game's camera code in the running Blur.exe
+                    and checks that its data is laid out as expected; if not, the game is left alone and BlurVR.log says why
+                    ("game camera: ..." and "head frustum: ..." lines).  Tried so far: the Steam build and the same game without the Steam
+                    wrapper (Blur.exe of 13,738,496 bytes).
   MarginDeg=6.0     degrees added to every side of that frustum (covers canted displays and quick head turns)
   PullBack=0.3      metres the frustum's apex is moved back (covers the eyes' offset and leaning)
 
@@ -160,6 +163,10 @@ Known limitations
   * The window on the desktop is a mirror of one eye (DesktopView), cropped to the window's shape; it is not the headset's full view.
 
 Troubleshooting
+  The view is still culled at the edges / looking away from the direction of travel: set Log=1 under [General], start a race for a minute,
+  and look in BlurVR.log for the lines that start with "game camera:" and "head frustum:". They say whether the game's camera code was
+  found in your Blur.exe, whether its data is laid out as expected, and how many frustums were replaced. If they say it was not found,
+  send BlurVR.log and the size and date of your Blur.exe.
   Nothing happens / the game is flat: start SteamVR first; run uninstall.bat to go back to the plain game.
   Something looks wrong in the headset: press Num8 while it is on screen. BlurVR saves BlurVR_dump_<time>_picture_*.bmp
   (the whole side-by-side picture, large files) and one file per HUD layer in the BlurVR folder: attach them to the report.
@@ -167,6 +174,15 @@ Troubleshooting
   Slow: lower CustomWidth/CustomHeight, or make sure SharedTransport=1. Num7 (or Enabled=1 under [Perf], with Log=1) writes timing lines to the log.
   If SharedTransport=1 gives odd textures or a black picture on your graphics card, set SharedTransport=0.
   To run the game flat, run uninstall.bat (or set Enabled=0 in BlurVR.ini).
+
+What is new in 1.3
+  * BlurVR should now work with any version of Blur, not only the Steam one. The head-following view frustum of 1.2 was tied to the
+    addresses of the Steam build and did nothing on any other copy of the game (the Steam build with its wrapper removed, for example,
+    is the same code and was left alone because its file is a different size). Now BlurVR finds the game's camera code in the running
+    Blur.exe by what the code looks like, not by where it is, recognises the camera you are looking through from its own data, and checks
+    that the game's data is laid out the way it expects before it changes anything. If some version of the game differs too much for
+    that, the game is left alone (it draws what it always drew) and BlurVR.log says why. Tried so far: the Steam build and the same game
+    without the Steam wrapper (Blur.exe of 13,738,496 bytes).
 
 What is new in 1.2
   * Objects no longer pop in and out at the edges of your view or when you look away from the direction of travel. The game decides

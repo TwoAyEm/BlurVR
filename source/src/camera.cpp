@@ -46,6 +46,7 @@ static bool DecomposeViewProjection(const Matrix4& viewProj, double& xScale, dou
 }
 
 CameraAxes g_lastCameraAxes;
+MainCameraInfo g_mainCamera;
 
 bool RecoverCamera(const float* registers, double& xScale, double& yScale, double& depthScale, double& depthBias,
                    CameraAxes& axes)

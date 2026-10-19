@@ -17,6 +17,14 @@ struct CameraAxes {
     bool valid = false;
 };
 extern CameraAxes g_lastCameraAxes; // of the last view-projection recovered by TryRecoverProjection
+// The camera of the last main-pass draw (set by NoteMainCameraAxes): its axes and the x/y scales of its projection (cot of the half
+// angles).  The culling code uses it to tell which camera the game hands over is the one the player sees.
+struct MainCameraInfo {
+    CameraAxes axes;
+    double xScale = 1, yScale = 1;
+    bool valid = false;
+};
+extern MainCameraInfo g_mainCamera;
 // Decompose a view-projection matrix without touching the global "main projection" state (needs g_matrixLayout).
 bool RecoverCamera(const float* registers, double& xScale, double& yScale, double& depthScale, double& depthBias,
                    CameraAxes& axes);

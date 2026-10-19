@@ -4,3 +4,4 @@ previous_build/
 *.lib
 d3d9.dll
 dist/
+image_dump/

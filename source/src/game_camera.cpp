@@ -1,67 +1,46 @@
 // Hooks on the game's own camera hand-over: the game culls with a frustum around its own camera, and this gives it one around the head.
+// The two functions are found by signature in whatever build of Blur.exe is running (game_signatures.cpp) and the frustum layout is
+// checked against the game's own planes before anything is changed (NOTES.md section 25).
 #include "game_camera.h"
 #include <cmath>
+#include "camera.h"
 #include "config.h"
 #include "core.h"
 #include "game_mode.h"
+#include "game_signatures.h"
 #include "inline_hook.h"
 #include "vr_runtime.h"
 
 namespace {
 
-// Addresses in the Steam build of Blur.exe (image size, the Steam stub's entry point and the linker time stamp are checked).
-const DWORD kImageSize = 0x00EB1000, kEntryRva = 0x00E5B2ED, kTimeStamp = 0x4BFC8EA9;
-
-// The render view class' two camera setters.  SetCameraData(view, T) copies the 0x3d0-byte camera data T (matrices, ...) into the
-// view; SetCamera(view, camera, flag) copies a 0x2b0-byte camera description into it.  The main view is given its camera by the pair
-// of calls at 0x42524a / 0x425258, the depth pre-pass view by 0x4252d3 / 0x4252f0 (NOTES section 25).
-const DWORD kSetCameraDataVa = 0x007A2CB0, kSetCameraVa = 0x007A2C40;
-const BYTE kSetCameraDataBytes[9] = {0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF0, 0x83, 0xEC, 0x18}; // push ebp / mov ebp,esp / and esp,-16 / sub esp,0x18
-const BYTE kSetCameraBytes[7] = {0x8B, 0xC1, 0x53, 0x8B, 0x5C, 0x24, 0x08};                 // mov eax,ecx / push ebx / mov ebx,[esp+8]
-const size_t kCameraSize = 0x2B0;
 const double kPi = 3.14159265358979323846;
+const size_t kScratchSize = 0x1000; // room for any camera description SetCamera copies (its size is read from its code: 0x2b0 in the Steam build)
 
 typedef void(__attribute__((fastcall)) * SetCameraDataFn)(void* self, void* edx, const void* data);
 typedef void(__attribute__((fastcall)) * SetCameraFn)(void* self, void* edx, const void* camera, int flag);
 SetCameraDataFn g_origSetCameraData = NULL;
 SetCameraFn g_origSetCamera = NULL;
-
-bool IsKnownBlurBuild()
-{
-    BYTE* base = (BYTE*)GetModuleHandleA(NULL);
-    if (!base)
-        return false;
-    IMAGE_DOS_HEADER* dos = (IMAGE_DOS_HEADER*)base;
-    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + dos->e_lfanew);
-    return nt->OptionalHeader.SizeOfImage == kImageSize && nt->OptionalHeader.AddressOfEntryPoint == kEntryRva &&
-           nt->FileHeader.TimeDateStamp == kTimeStamp;
-}
+size_t g_cameraBytes = 0x2B0;
+bool g_hooked = false;
 
 // ---------------------------------------------------------------------------------------------------------------------------------
-// The culling frustum (NOTES section 25).  The 0x2b0-byte camera description SetCamera() receives is the world-space frustum the game
-// culls with: [0] = 6 (planes in use), a plane through the camera facing forward at +0x10 and its absolute value at +0x20, 16 plane
-// slots of {inward normal, d} from +0x30 (left, right, bottom, top, far, near in the first six), -|normal| for each slot from +0x130,
-// and eight more points at +0x230 that do not belong to this frustum (left alone).  A point is inside when n . x + d >= 0.
-// The rendering camera is SetCameraData's struct and is not touched: what changes is only what gets drawn.
+// The culling frustum (NOTES section 25).  The camera description SetCamera() receives is the world-space frustum the game culls with:
+// [0] = 6 (planes in use), a plane through the camera facing forward at +0x10 and its absolute value at +0x20, 16 plane slots of
+// {inward normal, d} from +0x30 (left, right, bottom, top, far, near in the first six), -|normal| for each slot from +0x130, and eight
+// more points at +0x230 that do not belong to this frustum (left alone).  A point is inside when n . x + d >= 0.  The rendering camera
+// is SetCameraData's struct and is not touched: what changes is only what gets drawn.
 // ---------------------------------------------------------------------------------------------------------------------------------
-const DWORD kRetCameraDataMain[] = {0x0042524F, 0x004252D8, 0x00C30713}; // after SetCameraData: main view, depth pre-pass, a third view of the same camera
-const DWORD kRetCameraMain[] = {0x0042525D, 0x004252F5, 0x00C30720};     // after SetCamera, same three views
-
-bool IsOneOf(const void* ret, const DWORD* list, size_t count)
-{
-    for (size_t i = 0; i < count; i++)
-        if ((DWORD)(uintptr_t)ret == list[i])
-            return true;
-    return false;
-}
 
 // What SetCameraData told us about the game's camera for the view that gets its SetCamera next: position, axes (columns of the
-// view matrix at T+0x40, row vectors), near and far distance.
+// view matrix at T+0x40, row vectors), near and far distance, field of view and aspect.
 struct CameraSnapshot {
     void* view = NULL;
-    bool valid = false;
+    const void* data = NULL; // the struct itself (identifies the camera from call to call)
+    bool valid = false;      // looks like camera data
+    bool isMain = false;     // and is the camera the player sees
     double pos[3] = {0, 0, 0}, right[3] = {1, 0, 0}, up[3] = {0, 1, 0}, fwd[3] = {0, 0, 1};
-    double nearDist = 0.1, farDist = 1000;
+    double nearDist = 0.1, farDist = 1000, fov = 1, aspect = 1;
+    double projX = 1, projY = 1; // P[0][0], P[1][1] (cot of the half angles)
 } g_snapshot;
 
 double Dot3(const double* a, const double* b)
@@ -89,6 +68,10 @@ bool SnapshotFromCameraData(const float* t, CameraSnapshot& out)
         return false;
     out.nearDist = t[3];
     out.farDist = t[4];
+    out.fov = t[0];
+    out.aspect = t[1];
+    out.projX = t[0xC0 / 4];
+    out.projY = t[(0xC0 + 0x14) / 4];
     return out.nearDist > 0 && out.farDist > out.nearDist && out.farDist < 1e6;
 }
 
@@ -214,16 +197,126 @@ void WriteCullPlanes(float* camera, const CullPlanes& planes)
     }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Is this layout what we think it is?  Rebuild the game's own frustum from its camera data (identity head, its own field of view, no
+// margin, no pull back) and compare it, number by number, with the frustum the game passed.  A build whose structs are laid out
+// differently does not pass, and then nothing is written.
+// ---------------------------------------------------------------------------------------------------------------------------------
+struct LayoutCheck {
+    bool ok;
+    double worstError; // relative, over the compared numbers
+    int worstOffset;   // byte offset in the description (-1: a different kind of mismatch)
+    const char* reason;
+};
+
+LayoutCheck CheckFrustumLayout(const CameraSnapshot& cam, const float* description)
+{
+    LayoutCheck result = {false, 0, -1, ""};
+    if (!(cam.fov > 0.05 && cam.fov < 3.0 && cam.aspect > 0.2 && cam.aspect < 6.0)) {
+        result.reason = "the camera data has no field of view and aspect where expected";
+        return result;
+    }
+    int planesInUse;
+    memcpy(&planesInUse, description, 4);
+    if (planesInUse != 6) {
+        result.reason = "the frustum does not say it has 6 planes";
+        return result;
+    }
+    double tanV = tan(cam.fov / 2), tanH = tanV * cam.aspect;
+    EyeBox box = {-tanH, tanH, tanV, tanV};
+    EyeBox boxes[2] = {box, box};
+    Matrix4 identity = Identity();
+    Matrix4 eyes[2] = {identity, identity};
+    CullSettings none = {0, 0};
+    CullPlanes planes;
+    if (!ComputeCullPlanes(cam, identity, eyes, boxes, none, planes)) {
+        result.reason = "the game's own frustum could not be rebuilt";
+        return result;
+    }
+    float rebuilt[0x2B0 / 4];
+    memcpy(rebuilt, description, sizeof(rebuilt));
+    WriteCullPlanes(rebuilt, planes);
+    static const int offsets[] = {0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x130, 0x140, 0x150, 0x160, 0x170, 0x180};
+    for (int offset : offsets)
+        for (int k = 0; k < 4; k++) {
+            double game = description[offset / 4 + k], ours = rebuilt[offset / 4 + k];
+            double error = fabs(game - ours) / fmax(1.0, fabs(game));
+            if (!std::isfinite(error))
+                error = 1e9;
+            if (error > result.worstError) {
+                result.worstError = error;
+                result.worstOffset = offset + 4 * k;
+            }
+        }
+    result.ok = result.worstError <= 2e-3;
+    result.reason = result.ok ? "" : "the planes do not match the camera's own";
+    return result;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Which camera is the one the player sees?  The mod knows the main pass camera from its draws (g_mainCamera); the camera data that
+// looks like it - not mirrored, same direction, same projection - is it.  The views fed from the same struct follow it at once.
+// ---------------------------------------------------------------------------------------------------------------------------------
+bool LooksLikeMainCamera(const CameraSnapshot& cam)
+{
+    if (!g_mainCamera.valid)
+        return false;
+    double upCrossFwd[3] = {cam.up[1] * cam.fwd[2] - cam.up[2] * cam.fwd[1], cam.up[2] * cam.fwd[0] - cam.up[0] * cam.fwd[2],
+                            cam.up[0] * cam.fwd[1] - cam.up[1] * cam.fwd[0]};
+    if (Dot3(cam.right, upCrossFwd) < 0.5) // a mirrored camera (the planar reflection) has the other handedness
+        return false;
+    if (Dot3(cam.fwd, g_mainCamera.axes.forward) < 0.98 || Dot3(cam.up, g_mainCamera.axes.up) < 0.98) // (the rear-view camera looks backwards)
+        return false;
+    // the main pass alternates between 60 and 62.4 degrees: 10 % covers that and excludes the other views' projections
+    return fabs(cam.projX - g_mainCamera.xScale) < 0.1 * g_mainCamera.xScale && fabs(cam.projY - g_mainCamera.yScale) < 0.1 * g_mainCamera.yScale;
+}
+
+struct Counters {
+    unsigned dataCalls, dataValid, dataMain, cameraCalls, rewrites, layoutFailures;
+} g_counters;
+
+const void* g_mainData = NULL;    // the camera data struct last accepted as the main camera
+unsigned g_mainVerifiedAt = 0;    // data call number of that acceptance
+const unsigned kReverifyEvery = 600; // data calls
+
+struct LayoutRecord {
+    const void* description;
+    bool ok;
+};
+LayoutRecord g_layouts[8];
+unsigned g_layoutNext = 0;
+
 bool HeadFrustumWanted()
 {
     return g_cfg.cullHeadFrustum && g_vr.active && g_vr.poseValid && IsRaceMode();
 }
 
-// The camera description for a main-camera SetCamera call: the game's own unless the head frustum is on and works out.
+// The camera description for a main-camera SetCamera call: the game's own unless the head frustum is on, the layout is the expected one
+// and it works out.
 const void* CameraForCulling(void* view, const void* camera, BYTE* scratch)
 {
     static unsigned uses = 0, failures = 0;
-    if (!HeadFrustumWanted() || !g_snapshot.valid || g_snapshot.view != view)
+    if (!HeadFrustumWanted() || !g_snapshot.valid || !g_snapshot.isMain || g_snapshot.view != view)
+        return camera;
+    LayoutRecord* record = NULL;
+    for (LayoutRecord& r : g_layouts)
+        if (r.description == camera)
+            record = &r;
+    if (!record) {
+        LayoutCheck check = CheckFrustumLayout(g_snapshot, (const float*)camera);
+        record = &g_layouts[g_layoutNext++ % 8];
+        record->description = camera;
+        record->ok = check.ok;
+        if (check.ok)
+            Log("head frustum: layout verified against the game's own planes (largest difference %.1e), description %p", check.worstError, camera);
+        else {
+            g_counters.layoutFailures++;
+            Log("head frustum: the layout of this build is not the expected one (%s; largest difference %.3g at +0x%x of the description %p), "
+                "the game culls with its own frustum for this camera",
+                check.reason, check.worstError, check.worstOffset < 0 ? 0 : check.worstOffset, camera);
+        }
+    }
+    if (!record->ok)
         return camera;
     CullSettings settings = {g_cfg.cullMarginDeg, g_cfg.cullPullBack};
     CullPlanes planes;
@@ -232,8 +325,9 @@ const void* CameraForCulling(void* view, const void* camera, BYTE* scratch)
             Log("head frustum: could not be worked out from the head pose, the game's own frustum is used");
         return camera;
     }
-    memcpy(scratch, camera, kCameraSize);
+    memcpy(scratch, camera, g_cameraBytes);
     WriteCullPlanes((float*)scratch, planes);
+    g_counters.rewrites++;
     if (uses++ < 3 || uses % 3000 == 0)
         Log("head frustum (use %u): head %.1f deg off the game camera, tangents x %.3f..%.3f y %.3f..%.3f, margin %.1f deg, pull back %.2f m", uses,
             planes.yawDeg, planes.tangents[0], planes.tangents[1], planes.tangents[2], planes.tangents[3], g_cfg.cullMarginDeg, g_cfg.cullPullBack);
@@ -242,40 +336,101 @@ const void* CameraForCulling(void* view, const void* camera, BYTE* scratch)
 
 void __attribute__((fastcall)) H_SetCameraData(void* self, void* edx, const void* data)
 {
-    const void* ret = __builtin_return_address(0);
-    if (IsOneOf(ret, kRetCameraDataMain, sizeof(kRetCameraDataMain) / sizeof(DWORD))) {
-        CameraSnapshot snapshot;
-        snapshot.view = self;
-        snapshot.valid = SnapshotFromCameraData((const float*)data, snapshot);
-        g_snapshot = snapshot;
+    CameraSnapshot snapshot;
+    snapshot.view = self;
+    snapshot.data = data;
+    snapshot.valid = SnapshotFromCameraData((const float*)data, snapshot);
+    g_counters.dataCalls++;
+    if (snapshot.valid) {
+        g_counters.dataValid++;
+        if (data == g_mainData && g_counters.dataCalls - g_mainVerifiedAt < kReverifyEvery)
+            snapshot.isMain = true; // fed from the struct that was accepted a moment ago
+        else {
+            snapshot.isMain = LooksLikeMainCamera(snapshot);
+            if (snapshot.isMain) {
+                g_mainData = data;
+                g_mainVerifiedAt = g_counters.dataCalls;
+            } else if (data == g_mainData)
+                g_mainData = NULL;
+        }
+        if (snapshot.isMain)
+            g_counters.dataMain++;
     }
+    g_snapshot = snapshot;
     g_origSetCameraData(self, edx, data);
 }
 
 void __attribute__((fastcall)) H_SetCamera(void* self, void* edx, const void* camera, int flag)
 {
-    const void* ret = __builtin_return_address(0);
-    if (IsOneOf(ret, kRetCameraMain, sizeof(kRetCameraMain) / sizeof(DWORD))) {
-        alignas(16) static BYTE scratch[kCameraSize]; // (the callee copies it at once; the game's render thread is the only caller)
+    g_counters.cameraCalls++;
+    if (g_snapshot.valid && g_snapshot.isMain && g_snapshot.view == self) {
+        alignas(16) static BYTE scratch[kScratchSize]; // (the callee copies it at once; the game's render thread is the only caller)
         camera = CameraForCulling(self, camera, scratch);
     }
+    g_snapshot.valid = false; // the snapshot is for the SetCamera that follows its SetCameraData, nothing else
     g_origSetCamera(self, edx, camera, flag);
+}
+
+// Every executable section of the loaded Blur.exe except the Steam stub's.
+void ScanModule(GameCameraScan& scan, DWORD& imageSize, DWORD& timeStamp)
+{
+    BYTE* base = (BYTE*)GetModuleHandleA(NULL);
+    if (!base)
+        return;
+    IMAGE_DOS_HEADER* dos = (IMAGE_DOS_HEADER*)base;
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + dos->e_lfanew);
+    imageSize = nt->OptionalHeader.SizeOfImage;
+    timeStamp = nt->FileHeader.TimeDateStamp;
+    IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(nt);
+    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; i++) {
+        if (!(sections[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) || !strncmp((const char*)sections[i].Name, ".bind", 8))
+            continue;
+        DWORD size = sections[i].Misc.VirtualSize ? sections[i].Misc.VirtualSize : sections[i].SizeOfRawData;
+        ScanForGameCameraCode(base + sections[i].VirtualAddress, size, scan);
+    }
 }
 
 } // namespace
 
 void GameCameraPoll()
 {
-    static bool tried = false;
-    if (tried || !g_cfg.cullHeadFrustum || !g_cfg.enabled)
-        return;
-    tried = true;
-    if (!IsKnownBlurBuild()) {
-        Log("game camera: this Blur.exe is not the build the addresses were read from, the game's own culling is left as it is");
+    static unsigned frame = 0, tries = 0, nextTry = 1, reports = 0;
+    frame++;
+    if (g_hooked) { // a line now and then saying what the hooks saw: on another build this is what shows whether the camera is recognised
+        if ((frame == 600 || frame % 12000 == 0) && reports++ < 6)
+            Log("game camera: %u SetCameraData calls (%u looked like camera data, %u taken for the main camera), %u SetCamera calls, %u frustums "
+                "rewritten, %u layout failures",
+                g_counters.dataCalls, g_counters.dataValid, g_counters.dataMain, g_counters.cameraCalls, g_counters.rewrites, g_counters.layoutFailures);
         return;
     }
-    g_origSetCameraData = (SetCameraDataFn)InstallInlineHook((void*)(uintptr_t)kSetCameraDataVa, kSetCameraDataBytes,
-                                                              sizeof(kSetCameraDataBytes), (void*)H_SetCameraData);
-    g_origSetCamera = (SetCameraFn)InstallInlineHook((void*)(uintptr_t)kSetCameraVa, kSetCameraBytes, sizeof(kSetCameraBytes), (void*)H_SetCamera);
-    Log("game camera: SetCameraData hook %s, SetCamera hook %s", g_origSetCameraData ? "installed" : "FAILED", g_origSetCamera ? "installed" : "FAILED");
+    if (!g_cfg.cullHeadFrustum || !g_cfg.enabled || tries >= 5 || frame < nextTry)
+        return;
+    tries++;
+    nextTry = frame + 120; // (a build that unpacks its code late is looked at again a little later)
+    GameCameraScan scan;
+    InitGameCameraScan(scan);
+    DWORD imageSize = 0, timeStamp = 0;
+    ScanModule(scan, imageSize, timeStamp);
+    GameCameraCode code;
+    char why[256] = "";
+    if (!ResolveGameCameraCode(scan, code, why, sizeof(why))) {
+        Log("game camera: Blur.exe image 0x%x bytes, PE time stamp 0x%08x: the camera code was not found (%s) [try %u of 5]; the game culls with its own frustum",
+            (unsigned)imageSize, (unsigned)timeStamp, why, tries);
+        return;
+    }
+    BYTE expectedData[16], expectedCamera[16];
+    memcpy(expectedData, code.setCameraData, code.setCameraDataStolen);
+    memcpy(expectedCamera, code.setCamera, code.setCameraStolen);
+    tries = 5; // found: no more looking, whatever the hooks do
+    g_cameraBytes = code.cameraBytes;
+    g_origSetCameraData = (SetCameraDataFn)InstallInlineHook((void*)code.setCameraData, expectedData, code.setCameraDataStolen, (void*)H_SetCameraData);
+    g_origSetCamera = (SetCameraFn)InstallInlineHook((void*)code.setCamera, expectedCamera, code.setCameraStolen, (void*)H_SetCamera);
+    Log("game camera: Blur.exe image 0x%x bytes, PE time stamp 0x%08x: SetCameraData at %p (%s pattern) %s, SetCamera at %p (%s pattern, "
+        "description 0x%x bytes) %s",
+        (unsigned)imageSize, (unsigned)timeStamp, code.setCameraData, code.dataForm ? "loose" : "tight", g_origSetCameraData ? "hooked" : "NOT HOOKED",
+        code.setCamera, code.cameraForm ? "loose" : "tight", (unsigned)code.cameraBytes, g_origSetCamera ? "hooked" : "NOT HOOKED");
+    if (g_origSetCameraData && g_origSetCamera)
+        g_hooked = true;
+    else if (g_origSetCameraData || g_origSetCamera) // one of the two only: the pairing breaks, undo nothing but never use half
+        Log("game camera: only one of the two hooks could be installed; it forwards to the game unchanged");
 }
