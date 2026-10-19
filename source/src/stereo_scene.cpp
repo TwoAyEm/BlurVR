@@ -156,6 +156,30 @@ static const Matrix4* RecordRemap(ReflectionRecord& record, int eye)
 
 static const int kMaxWrites = 16;
 
+// Where the eye's camera sits in world space relative to the game's camera, for a draw seen through `view` (world to camera,
+// row vectors) and moved to the eye by `delta` (camera space to eye camera space).  The eye's origin in camera space is the p
+// with p * delta = 0, i.e. -t * transpose(R) for delta = [R 0; t 1]; it is turned into a world direction with the transpose of
+// the view's rotation.  False when the view's rotation is not orthonormal (not a plain camera).
+static bool EyeWorldOffset(const Matrix4& view, const Matrix4& delta, double offset[3])
+{
+    for (int i = 0; i < 3; i++) {
+        double length = view.m[i][0] * view.m[i][0] + view.m[i][1] * view.m[i][1] + view.m[i][2] * view.m[i][2];
+        if (fabs(length - 1.0) > 0.03)
+            return false;
+    }
+    double p[3];
+    for (int i = 0; i < 3; i++)
+        p[i] = -(delta.m[3][0] * delta.m[i][0] + delta.m[3][1] * delta.m[i][1] + delta.m[3][2] * delta.m[i][2]);
+    for (int j = 0; j < 3; j++)
+        offset[j] = p[0] * view.m[j][0] + p[1] * view.m[j][1] + p[2] * view.m[j][2];
+    return true;
+}
+
+// The eye's world offset of the last ApplyEyeConstants (for the camera position in the pixel shader constants).
+static double g_eyeWorldOffset[3];
+static bool g_eyeWorldOffsetValid = false;
+static bool g_eyeMainCamera = false; // that draw was seen through the main camera (not a planar reflection)
+
 void ApplyEyeConstants(IDirect3DDevice9* device, int eye)
 {
     const EyeBox& box = (eye == 2) ? g_vr.unionBox : g_vr.eyeBox[eye];
@@ -167,6 +191,8 @@ void ApplyEyeConstants(IDirect3DDevice9* device, int eye)
     const Matrix4* delta = &g_vr.eyeCameraDelta[eye];
     Matrix4 flippedDelta;
     int flipSlot = 0;
+    g_eyeWorldOffsetValid = false;
+    g_eyeMainCamera = !(IsHalfResPass() && IsReflectionSizedPass());
     if (IsHalfResPass() && IsReflectionSizedPass() && g_matrixLayout) {
         int flipMode = g_cfg.reflectionFlipMode;
         double viewDeterminant = 1;
@@ -308,6 +334,32 @@ void ApplyEyeConstants(IDirect3DDevice9* device, int eye)
         writes[writeCount] = {tracked.reg, count, out};
         writeCount++;
     }
+    // The camera's world position (g_vViewPosition): view vectors for specular, reflections and fog, billboards turned to face
+    // the camera.  Left alone it keeps all of that at the game's camera while the geometry moves with the head, so the shading
+    // slides over the surfaces as the head moves.  Moved to the eye through the draw's own camera (the reflection pass has the
+    // mirrored one, with the mirrored delta).
+    if (g_matrixLayout && writeCount < kMaxWrites) {
+        for (const TrackedConstant& tracked : g_currentVsInfo->tracked) {
+            if ((tracked.kind != TK_View && tracked.kind != TK_ViewProj) || tracked.reg + 4 > 256)
+                continue;
+            Matrix4 view;
+            LoadMatrix(&g_vsConstants[tracked.reg * 4], g_matrixLayout, view);
+            if (tracked.kind == TK_ViewProj)
+                view = Multiply(view, *gameProjectionInverse);
+            g_eyeWorldOffsetValid = EyeWorldOffset(view, *delta, g_eyeWorldOffset);
+            break;
+        }
+        UINT reg = g_currentVsInfo->viewPositionReg;
+        if (g_eyeWorldOffsetValid && reg < 256) {
+            float* out = values[writeCount];
+            const float* game = &g_vsConstants[reg * 4];
+            for (int i = 0; i < 3; i++)
+                out[i] = (float)(game[i] + g_eyeWorldOffset[i]);
+            out[3] = game[3];
+            writes[writeCount] = {reg, 1, out};
+            writeCount++;
+        }
+    }
     // Main-pass shaders find the planar-reflection texel from the reflection camera's matrix (x, y, w columns in
     // g_ReflectionViewMatrix0/1/3). The reflection texture was rendered through the per-eye head-tracked camera, so the
     // lookup matrix must get the same per-eye transform.
@@ -411,4 +463,105 @@ void ApplyCameraShift(IDirect3DDevice9* device, const Matrix4& oldProj, const Ma
         writeCount++;
     }
     DeviceSetVsOverrides(device, writes, writeCount);
+}
+
+// The main view's camera in the pixel shader constants, one column per register (GameWorld/View/Main.cpp): load it from the
+// game's values, false when they are not there or not of the expected kind.
+static bool LoadPixelColumns(int base, Matrix4& matrix)
+{
+    if (base < 0 || base + 4 > 256)
+        return false;
+    for (int column = 0; column < 4; column++)
+        for (int row = 0; row < 4; row++)
+            matrix.m[row][column] = g_psConstants[(base + column) * 4 + row];
+    return true;
+}
+static void StorePixelColumns(const Matrix4& matrix, int base, unsigned used, PFN_SetShaderConstantF setConstants,
+                              IDirect3DDevice9* device)
+{
+    for (int column = 0; column < 4; column++) {
+        if (!(used & (1u << column)))
+            continue;
+        float value[4];
+        for (int row = 0; row < 4; row++)
+            value[row] = (float)matrix.m[row][column];
+        setConstants(device, (UINT)(base + column), value, 1);
+    }
+}
+static bool IsRigid(const Matrix4& view)
+{
+    for (int i = 0; i < 3; i++) {
+        for (int j = i; j < 3; j++) {
+            double d = view.m[i][0] * view.m[j][0] + view.m[i][1] * view.m[j][1] + view.m[i][2] * view.m[j][2];
+            if (fabs(d - (i == j ? 1.0 : 0.0)) > 0.03)
+                return false;
+        }
+        if (fabs(view.m[i][3]) > 1e-3)
+            return false;
+    }
+    return fabs(view.m[3][3] - 1.0) < 1e-3;
+}
+
+bool ApplyEyePixelConstants(IDirect3DDevice9* device, int eye)
+{
+    const PixelShaderInfo* ps = g_currentPsInfo;
+    if (!ps || !ps->eyeConstants || !g_eyeMainCamera)
+        return false; // (in the reflection pass these still describe the main camera, not the mirrored one being drawn)
+    PFN_SetShaderConstantF setConstants = (PFN_SetShaderConstantF)g_deviceOriginals[VT_SetPixelShaderConstantF];
+    const Matrix4& delta = g_vr.eyeCameraDelta[eye];
+    bool wrote = false;
+    Matrix4 view;
+    bool haveView = LoadPixelColumns(ps->viewMatrixBase, view) && IsRigid(view);
+    if (haveView) {
+        // view-space normals of the lighting pre-pass (road, ocean): with the game's matrix they stay in the game camera's
+        // space while the lights are moved to the eye, and the road's lighting turns with the head
+        StorePixelColumns(Multiply(view, delta), ps->viewMatrixBase, ps->viewMatrixUsed, setConstants, device);
+        wrote = true;
+    }
+    Matrix4 viewProj;
+    const Matrix4* gameProjectionInverse = GameProjectionInverse();
+    if (gameProjectionInverse && LoadPixelColumns(ps->viewProjBase, viewProj) &&
+        IsRigid(Multiply(viewProj, *gameProjectionInverse))) {
+        // (water: a reflected point projected to the screen to look up the scene picture, which is the eye's half)
+        const EyeBox& box = (eye == 2) ? g_vr.unionBox : g_vr.eyeBox[eye];
+        const EyeRewrite& rewrite = GetRewrite(eye, 0, box, delta, *gameProjectionInverse);
+        StorePixelColumns(Multiply(viewProj, rewrite.clipRemap), ps->viewProjBase, ps->viewProjUsed, setConstants,
+                          device);
+        wrote = true;
+    }
+    double offset[3];
+    bool haveOffset = false;
+    if (g_eyeWorldOffsetValid) {
+        memcpy(offset, g_eyeWorldOffset, sizeof(offset));
+        haveOffset = true;
+    } else if (haveView)
+        haveOffset = EyeWorldOffset(view, delta, offset);
+    for (int slot = 0; slot < 2 && haveOffset; slot++) {
+        int reg = ps->viewPositionRegs[slot];
+        if (reg < 0 || reg >= 256)
+            continue;
+        const float* game = &g_psConstants[reg * 4];
+        float value[4] = {(float)(game[0] + offset[0]), (float)(game[1] + offset[1]), (float)(game[2] + offset[2]), game[3]};
+        setConstants(device, (UINT)reg, value, 1);
+        wrote = true;
+    }
+    return wrote;
+}
+
+void RestoreEyePixelConstants(IDirect3DDevice9* device)
+{
+    const PixelShaderInfo* ps = g_currentPsInfo;
+    if (!ps)
+        return;
+    PFN_SetShaderConstantF setConstants = (PFN_SetShaderConstantF)g_deviceOriginals[VT_SetPixelShaderConstantF];
+    auto restore = [&](int base, unsigned used) {
+        for (int column = 0; column < 4 && base >= 0 && base + 4 <= 256; column++)
+            if (used & (1u << column))
+                setConstants(device, (UINT)(base + column), &g_psConstants[(base + column) * 4], 1);
+    };
+    restore(ps->viewMatrixBase, ps->viewMatrixUsed);
+    restore(ps->viewProjBase, ps->viewProjUsed);
+    for (int slot = 0; slot < 2; slot++)
+        if (ps->viewPositionRegs[slot] >= 0 && ps->viewPositionRegs[slot] < 256)
+            setConstants(device, (UINT)ps->viewPositionRegs[slot], &g_psConstants[ps->viewPositionRegs[slot] * 4], 1);
 }

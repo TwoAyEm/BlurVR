@@ -14,6 +14,13 @@ struct PixelShaderInfo {
     bool motionBlur = false;
     int shadowMatrixReg = -1;
     int lightPosReg = -1, lightPosCount = 0, viewUpReg = -1, viewRayScaleReg = -1, lightMatrixReg = -1;
+    // The game's camera as the main view hands it to pixel shaders (GameWorld/View/Main.cpp): its world position
+    // (g_vViewPositionPS, and g_vViewPosition in the vehicle and fog shaders), and the view and view-projection matrices
+    // one column per register (g_vViewMatrix0..3, g_vViewProjMatrix0..3; the first register of the four, -1 = not used).
+    int viewPositionRegs[2] = {-1, -1};
+    int viewMatrixBase = -1, viewProjBase = -1;
+    unsigned viewMatrixUsed = 0, viewProjUsed = 0; // which of the four registers the shader declares (bit n = ...Matrix<n>)
+    bool eyeConstants = false; // any of the above: the per-eye draws rewrite them (ApplyEyePixelConstants)
 };
 
 enum TrackedKind { TK_WorldViewProj, TK_ViewProj, TK_WorldView, TK_View, TK_Projection, TK_View3x3 };
@@ -27,6 +34,7 @@ struct VertexShaderInfo {
     std::string otherConstantNames;
     bool ui = false; // otherConstantNames holds a g_Ui... constant: a 2D user-interface shader
     UINT reflectionRegs[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+    UINT viewPositionReg = 0xFFFF; // g_vViewPosition / g_vCameraPosition: the camera's world position (view vectors, billboards)
     std::vector<ShaderConstant> constants;
 };
 

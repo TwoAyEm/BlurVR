@@ -386,6 +386,8 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
         const bool mayHaveShadowDecal = g_currentPsInfo && g_currentPsInfo->shadowMatrixReg >= 0;
         const bool mayHaveLightVolume = g_currentPsInfo && g_currentPsInfo->viewRayScaleReg >= 0 &&
                                         g_currentPsInfo->lightMatrixReg >= 0 && g_currentPsInfo->lightPosReg >= 0;
+        const bool mayHaveCamera = g_currentPsInfo && g_currentPsInfo->eyeConstants;
+        bool cameraApplied = false;
         for (int n = 0; n < eyeCount; n++) {
             int i = (eyeCount == 2) ? (int)((n + eyeParity) & 1) : 0;
             int e = g_cfg.stereo ? i : 2;
@@ -406,6 +408,8 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
                 DeviceSetEyeScissor(device, r);
             }
             ApplyEyeConstants(device, e);
+            if (mayHaveCamera && ApplyEyePixelConstants(device, e))
+                cameraApplied = true;
             float savedShadowConstants[16];
             bool shadowApplied = mayHaveShadowDecal && ApplyShadowDecalForEye(device, e, savedShadowConstants);
             float savedLightConstants[24];
@@ -422,6 +426,8 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
                 setPixelConst(device, (UINT)g_currentPsInfo->lightPosReg, savedLightConstants + 20, 1);
             }
         }
+        if (cameraApplied)
+            RestoreEyePixelConstants(device);
         // (the game's constants and scissor state come back when something else uses the device: see DeviceRestoreAll)
     } else if (g_drawIsMirror && g_cfg.mirror3d && g_cfg.hudWorldLocked && EnsureHudTargets(device) &&
                g_mirrorSurface[0] && g_mirrorSurface[1]) {

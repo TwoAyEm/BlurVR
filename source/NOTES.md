@@ -81,6 +81,7 @@ race) plus a "3D scene is really being drawn" probe (>= 20 tracked scene draws f
 * **Rewriting the matrices of a draw** (`ApplyEyeConstants`): for every tracked vertex-shader matrix `X`:
   * view-projection and world-view-projection: `X' = X * inv(P_old) * C * P_new`
   * view and world-view: `X' = X * C`;   projection: `X' = P_new`;   3x3 view (`K_V3`): rotated by `C`.
+  * camera world position (`g_vViewPosition`, VS and PS) and the pixel shaders' own view / view-projection columns: see section 23.
   The game's original values stay in the shadow array `g_vsConstants`; the rewritten ones are uploaded through the
   **original** (unhooked) `SetVertexShaderConstantF` so the shadow copy is never polluted, and restored after.
 * Each eye is drawn with scissor = its half of the image, minus the **seam gutter** (`SeamGutter` px of black at the
@@ -373,7 +374,7 @@ callback type; each module header lists what the module exports (with one-line c
 | `vr_runtime` | OpenVR / SteamVR session: initialisation, head pose, per-eye camera deltas, floating menu screen, and submitting the finished frame to the compositor. | `ReleaseStagingResources`, `EnsureStagingResources`, `EnsureFrameTexture`, `SplitVerticalTangents`, `VrInit`, `VrUpdatePose`, `PlaceMenuOverlay`, `VrSubmitFrame`, `StartVrInitThread`, `VrInitThread` |
 | `render_state` | What the game is rendering into right now (render target, viewport, scissor, bound textures) and classification of the current pass (main scene, half-size, reflection). | `RefreshRenderTargetState`, `IsMainSizedTarget`, `IsHalfResPass`, `IsReflectionSizedPass`, `IsMainPass` |
 | `camera` | Recovering the game camera/projection from g_mViewProj and building the headset projection for each eye. | `DecomposeViewProjection`, `TryRecoverProjection`, `BuildEyeProjection` |
-| `stereo_scene` | Stereo duplication of main-pass draws: rewriting the tracked shader matrices for one eye (the products that do not change from draw to draw are cached, section 14). | `ReflectionColumnsMatch`, `GetRewrite`, `RecordRemap`, `ApplyEyeConstants`, `RestoreEyeConstants`, `ApplyCameraShift` |
+| `stereo_scene` | Stereo duplication of main-pass draws: rewriting the tracked shader matrices for one eye (the products that do not change from draw to draw are cached, section 14). | `ReflectionColumnsMatch`, `GetRewrite`, `RecordRemap`, `ApplyEyeConstants`, `RestoreEyeConstants`, `ApplyCameraShift`, `ApplyEyePixelConstants`, `RestoreEyePixelConstants` |
 | `device_state` | What the device holds versus what the game believes (vertex constants, scissor): per-eye changes are undone lazily and redundant writes skipped (section 14). | `DeviceNoteGameVsConstants`, `DeviceSetVsOverrides`, `DeviceSetEyeScissor`, `DeviceRestoreAll`, `DeviceStateReset` |
 | `mirror_stereo` | Rear-view mirror rendered once per eye (see section 10). | `IsMirrorScenePass`, `DrawMirrorSceneStereo`, `PrepareMirrorEyeTextures`, `NoteMainCameraAxes`, `ReleaseMirrorStereo` |
 | `photo_stereo` | The main menu's photo viewer: its picture (a side-by-side photo) drawn once per eye into the per-eye layers (see section 6). | `IsPhotoDraw`, `PreparePhotoEyeTextures`, `DrawPhotoStereo`, `ReleasePhotoStereo` |
@@ -914,3 +915,43 @@ The repository on GitHub (https://github.com/TwoAyEm/BlurVR, branch `main`) star
 `BlurVR-<version>.zip` as the workflow artifact `BlurVR-zip`.  A push of a tag `v<version>` also creates the GitHub release with the zip attached (`gh release create` with the workflow's own token, no other secrets).
 To release: bump `BLURVR_VERSION` in `src/core.h`, commit, `git tag v<version>`, `git push origin main v<version>`.  The Zig compiler's version matters for the DLL bytes only, not for behaviour as far as tested; change the pin
 deliberately.
+
+## 23. The camera's position and the pixel shaders' camera, per eye
+
+Head tracking moved the geometry but not everything the game derives from its camera. The game hands the camera to shaders in
+three more places than the matrices of section 3 (all read from the dev source, `mercury/library/graphics/display/source/device/d3d9/D3D9Device.cpp`
+`SetViewShaderConstants3D` and `amax/game/Game/GameWorld/View/Main.cpp`):
+
+* **`g_vViewPosition`**, the camera's world position (`m_CameraToWorld` translation, w = 0), in a vertex register (`CCV_DISPLAY_VIEW_POSITION`)
+  and a pixel register (`CCP_DISPLAY_VIEW_POSITION`; the fog volumes get it as `CCP_RENDER_SETTINGS_4`). Used for the view vector of
+  specular, environment reflections and fresnel (roads, water, puddles, car paint in `vehicle_common.h`, light flares), fog distance,
+  billboards turned to the camera, and **the sky dome, which is built around it** (`vsBaseSkyDome.vsh`: `world = vertex + g_vViewPosition`).
+  With the game's value the reflections and highlights stayed where the game camera saw them while the surfaces moved with the head,
+  and each eye sat off-centre in a dome of finite size, so the sky had parallax when leaning. Also named `g_vCameraPosition` (aux flares,
+  fake environment light).
+* **`g_vViewPositionPS`**, the same position for pixel shaders (`CCP_VIEW_POSITION`).
+* **`g_vViewMatrix0..3`** and **`g_vViewProjMatrix0..3`** in *pixel* registers (`CCP_VIEW_MATRIX..`, `CCP_VIEWPROJ_MATRIX..`; c61-c68 in the
+  dev source), **one column per register** (`C_PSConstant(mView._11, _21, _31, _41)`). The road and ocean shaders write their view-space
+  normals for the lighting pre-pass with them (`Road*.fx`, `Ocean*.fx`), and water projects its reflected point to the screen with the
+  view-projection (`Special/Water.h`). The lights are moved to the eye (section 5), so mono normals made the road's lighting turn with the head.
+
+What the mod does (`stereo_scene.cpp`, both only for plan-1 draws, the stereo-duplicated ones):
+
+* Vertex shader (`ApplyEyeConstants`): `VertexShaderInfo::viewPositionReg` (CTAB name `g_vViewPosition` / `g_vCameraPosition`) gets
+  `position + offset`, where `offset` is where the eye's camera is in world space relative to the game's: the eye origin in camera space
+  is `-t * transpose(R)` for `C = [R 0; t 1]`, turned into world space with the transpose of the draw's own view rotation (`g_mView`,
+  or `g_mViewProj * inverse(P)`). In the reflection pass that is the mirrored camera with the mirrored delta, the same pair the matrices
+  get. It goes through the lazy vertex-constant path like the matrices. Not applied when the view rotation is not orthonormal.
+* Pixel shader (`ApplyEyePixelConstants` / `RestoreEyePixelConstants`, from `RunDraw`'s eye loop): only the registers the shader's
+  CTAB declares are written (`PixelShaderInfo::viewMatrixUsed / viewProjUsed`; the base register is the declared register minus its
+  index). The view columns become those of `V * C` if the four registers in the game's copy form a rigid matrix, the view-projection
+  columns those of `X * inverse(P) * C * P_eye` (the cached `clipRemap` of `GetRewrite`) if `X * inverse(P)` is rigid, and the positions get
+  the eye offset. The game's values are put back once both eyes are drawn. Skipped in the reflection pass: these constants describe
+  the main camera there, not the mirrored one being drawn.
+
+Not checked in the headset yet. What should change: highlights and reflections on the road and the cars stay on the surface when the
+head moves, the sky shows no parallax when leaning, billboards (trees, crowds) turn towards the head, and the lighting on the road no longer
+turns with the head. `tools/hotpath_check.py` gives the same hashes as before in all eight configurations (its synthetic shaders do
+not declare these constants, so that checks only that nothing else changed); the offset formula was checked against `inverse(V * C)`
+for random cameras, mirrored ones included (worst error 2e-10).
+
