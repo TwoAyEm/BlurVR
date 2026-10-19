@@ -1,0 +1,916 @@
+# BlurVR – developer notes
+
+How BlurVR 1.0 works, what the game does, and why each non-obvious decision was made. Read this before changing the renderer.
+
+Contents
+
+1. What it is, build, deploy
+2. Frame flow in one page
+3. Conventions and the core maths
+4. What we know about Blur's renderer
+5. Per-eye fixes for screen-space passes
+6. The HUD / UI layers
+7. VR session, menus, loading
+8. Resolution and display modes
+9. Settings reference
+10. Known limits, features, ideas
+11. How to investigate a new rendering problem
+12. Code map
+
+---------------------------------------------------------------------------------------------------------
+
+## 1. What it is, build, deploy
+
+BlurVR is a **32-bit Direct3D 9 proxy `d3d9.dll`** that sits next to `Blur.exe` (Steam build, DRM-wrapped, so no
+file patching and no injection of game code; everything happens by hooking at runtime). It talks to SteamVR
+through OpenVR's C API (`openvr_api.dll` in the `BlurVR\` subfolder; `third_party/openvr_capi.h`).
+
+* Menus and loading: the game image is shown on a floating SteamVR overlay in front of the player.
+* Races: true stereo, seated. Every draw of the main 3D pass is issued twice (left half / right half of the game's
+  render target), the finished side-by-side (SBS) back buffer is split and submitted to the compositor.
+* Game controls are unchanged. Head tracking drives only the in-game camera (position is fixed to the car).
+
+Build (Linux, cross-compile with Zig): `./build.sh` in the repository root. It needs `pip install ziglang` and
+produces `d3d9.dll` (x86). The `.def` file maps the stdcall-decorated exports to the plain names the game links
+to. Zig/libunwind leaks some extra exports into the DLL; they are harmless.
+
+Deploy: copy `d3d9.dll` to the game folder (next to `Blur.exe`) and keep it, `BlurVR.ini`, `openvr_api.dll`
+in `<game>\BlurVR\`. `install.bat` / `uninstall.bat` in the release package do the copy. The mod writes
+`BlurVR\BlurVR.log` on every run – ask for it with any bug report.
+
+There is no way to run the game from the build machine. **Every change that touches rendering has to be tested in
+the headset.**
+
+## 2. Frame flow in one page
+
+```
+Direct3DCreate9            -> load real d3d9, hook IDirect3D9 (CreateDevice, mode list), hook CreateFile* imports
+CreateDevice               -> hook the IDirect3DDevice9 vtable (draws, state, shaders, textures, Present, Reset)
+                              VR start is deferred until the first level begins loading (see 7)
+every game draw call       -> RunDraw(): ClassifyDraw() then one of
+                                0 normal   : untouched (plus the per-eye special cases below)
+                                1 scene    : issued twice, once per eye (scissor + rewritten matrices)
+                                2 HUD      : rendered into an off-screen HUD layer
+Present                    -> ComposeHud (draw the HUD layer into each eye as a flat world-locked panel),
+                              copy back buffer to the compositor texture, Submit(L), Submit(R) or show the
+                              menu overlay, then WaitGetPoses for the next frame's head pose
+```
+
+Race versus menu is decided from the files the game opens (`levels\showroom` = menu, any other `levels\<track>` =
+race) plus a "3D scene is really being drawn" probe (>= 20 tracked scene draws for 15 frames). `F8` overrides.
+
+## 3. Conventions and the core maths
+
+* **Row vectors, D3DX style**: `p' = p * M`. Matrices on the CPU are `Matrix4` (doubles). Constants arrive from the
+  game as 4 float4 registers; the game's layout (row-major vs transposed) is auto-detected the first time a valid
+  view-projection decomposes (`g_matrixLayout`, 1 = row, 2 = transposed; ini `[Matrix] Layout` can force it).
+* Left-handed D3D space, +Z forward. OpenVR is right-handed, -Z forward: the pose is converted by flipping Z.
+* **Camera recovery**: the game only uploads `g_mViewProj` (and sometimes `g_mView`) to vertex shaders. A matrix
+  `X = V * P` with `V` rigid and `P = [[a,0,0,0],[0,b,0,0],[0,0,c,1],[0,0,d,0]]` can be decomposed
+  (`DecomposeViewProjection`): `X[:,3] = V[:,2]`, `X[:,0] = a*V[:,0]`, `X[:,1] = b*V[:,1]`,
+  `X[:,2] = c*V[:,2] + d*e3`. Blur uses a **reversed depth range** (`c ~ 0`, `d > 0`), so the sign tests are loose.
+  This gives `a` (x scale), `b` (y scale), `c`, `d`; they are kept in `g_projXScale/YScale/DepthScale/DepthBias`.
+* **Eye delta** `g_vr.eyeCameraDelta[e]` (`Ceye`): camera-space delta between the game's camera and the eye's
+  head-tracked camera, row-vector form, `pos_eye = pos_old * C`. Built from the pose relative to the recentre pose
+  plus half the IPD along X (`e` = 0 left, 1 right, 2 centre). The game keeps driving the car camera; only the
+  head offset is added.
+* **Per-eye projection** `BuildEyeProjection(box, eye)`: `box` is the headset's tangent box `{left,right,up,down}`
+  from `GetProjectionRaw`. In the default "NDC eyes" layout the SBS image is one render target and each eye owns
+  one half of clip space: left eye NDC x in [-1,0], right in [0,1]. Depth terms `c`, `d` are the game's own so the
+  depth buffer stays consistent with the game's shaders.
+* **Rewriting the matrices of a draw** (`ApplyEyeConstants`): for every tracked vertex-shader matrix `X`:
+  * view-projection and world-view-projection: `X' = X * inv(P_old) * C * P_new`
+  * view and world-view: `X' = X * C`;   projection: `X' = P_new`;   3x3 view (`K_V3`): rotated by `C`.
+  The game's original values stay in the shadow array `g_vsConstants`; the rewritten ones are uploaded through the
+  **original** (unhooked) `SetVertexShaderConstantF` so the shadow copy is never polluted, and restored after.
+* Each eye is drawn with scissor = its half of the image, minus the **seam gutter** (`SeamGutter` px of black at the
+  inner edge of each eye so glow/blur cannot bleed across the seam; 0 by default, 24 was the old default).
+* Planar reflections (half-size pass) get a mirrored-camera delta (conjugation of `C`, axis chosen by the sign of the
+  view determinant) and their lookup matrix `g_ReflectionViewMatrix0/1/3` in the main pass is rewritten with the
+  same transform (records kept in `g_reflectionRecords`, matched by the x/y/w columns of the reflection view-proj).
+
+## 4. What we know about Blur's renderer
+
+Blur (Bizarre Creations, 2010) is a Direct3D 9 deferred renderer using ps/vs 3.0 shaders compiled with D3DX, so
+**every shader carries a constant table (CTAB) with the HLSL variable names**. That is how all identification is
+done – by constant names, never by shader index (indices are the creation order in one run and not stable).
+
+Pass sizes (back buffer SBS 1920x1080 for example):
+
+| render target | what |
+|---|---|
+| back buffer size, with depth | main scene pass (G-buffer/forward) – the one that gets stereo-duplicated |
+| back buffer size, no depth, `g_Ui...` shaders | menu/HUD UI |
+| 0.45–0.55 of back buffer | half-size passes: planar reflection (when drawing 3D), glow/flare sprites, motion-blur (960x540) |
+| 0.2–0.3 | quarter-size bloom chain |
+| 256x256 | shadow-plane texture for car shadows, blurred by two small passes |
+
+Constants and shaders we rely on (all identified from CTABs and disassembly, ps_3_0):
+
+* Vertex matrices: `g_mWorldViewProj`, `g_mViewProj` / `g_ViewProjMatrix`, `g_mWorldView`, `g_mView` (4x4 or 3x3),
+  `g_mProj`, and the split forms `g_vViewMatrix0..3`, `g_vViewProjMatrix0..3` (four consecutive float4s);
+  `g_ReflectionViewMatrix0/1/3`.
+* Motion blur PS: `g_mMatrix` (c0..c3) + `g_vStepScale`, `g_vSettings`, `g_vNoise`, `g_vDepthScale`.
+* Shadow decal PS: `g_ShadowPlaneSpaceMatrix` (c0..c3), `g_ShadowMult`, `g_PixelOffset`, `g_vDepth`.
+* Deferred lights: full-screen VS interpolates four far corners `g_vFar0..3` (c200..c203) with `g_vUVScale/Offset`
+  (c204/205); PS uses `g_vPosition` (light position in mono view space, w = attenuation), `g_vColour`,
+  `g_vDepth`, `g_vViewUpVector`. Light volumes (spot/projected): `g_vXY`, `g_vPosition`, `g_mLight`.
+* Lens flares: `g_FlareSize` / `g_FlareColour`. UI: any shader with a `g_Ui...` constant.
+* Final composite (to back buffer): `g_mColour`, `g_vFilmGrain`, `g_vSettings1/2`, `g_vSpecialFX`; it samples the
+  quarter-size bloom texture (so `NoLensFlare=1` replaces the last quarter-size input with opaque black; that removes the glow around lights on the car).
+
+The game **culls with its own narrow camera frustum**, so objects outside it never get submitted; with a wide head
+turn away from the direction of travel they can pop out (see section 10).
+
+## 5. Per-eye fixes for screen-space passes
+
+All of these were wrong by default because they assume **one full-width camera image**; in the SBS image the
+screen centre, UV range and frustum corners are those of the whole image, not of an eye. Each is handled by running
+the pass once per eye (scissor = eye half) with constants rewritten for that eye. All use the original constant
+setters and restore afterwards.
+
+**Motion blur** (`MotionBlurPerEye`). PS has `g_mMatrix` in UV space (rows u, v, depth, 1; columns x, y, w used), so
+its radial centre landed on the seam. Per eye: `M_e = T * M * S` with
+`T = [[a1,0,0,0],[0,a2,0,0],[0,0,1,0],[b1,b2,0,1]]`, `S = inv(T)`-like (`[1/a1,...,-b1/a1,-b2/a2]`),
+`a1 = A*(r-l)`, `b1 = 0.5 + 0.5*A*(l - 2*off*(r-l))`, `a2 = 0.5*B*(up+dn)`, `b2 = 0.5 - 0.5*B*up`,
+`off = 0` (left) / `0.5` (right), `A,B` = game projection scales. Column 2 (depth) is left untouched. Confirmed good
+in the headset.
+
+**Shadow decals** (`ApplyShadowDecalForEye`). The decal PS rebuilds the pixel's camera-space position from depth and
+screen position: `q = (u*Z, v*Z, k, Z)`, `Z = 0.115/|depth|`, then multiplies by `g_ShadowPlaneSpaceMatrix` to get
+decal-plane coordinates. Per eye: `M_new = inv(B_e) * inv(C) * B_old * M_orig`, where `B(P)` (`ScreenZMapping`) maps a
+camera-space point to `(u*Z, v*Z, 1, Z)` for projection `P` (columns `0.5*P[:,3]+0.5*P[:,0]`,
+`0.5*P[:,3]-0.5*P[:,1]`, `(0,0,0,1)`, `P[:,3]`). The decal box itself is an ordinary stereo-duplicated draw. Confirmed
+in the headset: player car, CPU cars, moving shadows past street lights, jumps.
+
+**Deferred lights, full-screen passes** (`DrawDeferredLightPerEye`). New far corners from the eye's tangent box
+(x from `(-1-P20)/P00`, `(1-P20)/P00`, y analogous, scaled by the original corner depth so the interpolated ray keeps
+its length), light positions `pos * C` (w untouched), `g_vViewUpVector` rotated by the 3x3 of `C`, scissor = eye half,
+draw, restore. Identified by: bound PS has `g_vPosition` (1–8 float4) and the bound VS has `g_vFar0`.
+Confirmed better than the game's own in the headset; always on.
+
+**Deferred lights, light volumes** (`ApplyLightVolumeForEye`). `g_vXY = (2/P00, -2/P11, (-1-P20)/P00, (1-P21)/P11)`,
+`g_mLight' = inv(C) * g_mLight`, `g_vPosition' = pos * C`; the volume itself is a normal stereo-duplicated draw.
+
+**Light streaks / flare sprites** (`DrawStreakToLayer`/`FlushStreakLayer`). Untracked alpha-blended sprites in the half-size
+glow pass are positioned in the game's mono screen space and would ghost in both eyes. They are captured into a
+layer and re-projected into each eye as a quad 40 units in front, through the head transform, so they stay locked to
+the world direction. `NoLensFlare=1` drops the lens-flare ghost sprites outright (a screen-space effect that cannot work
+per eye). Always on; it does not depend on any ini option.
+
+**Reflection lookup** – see section 3.
+
+## 6. The HUD / UI layers
+
+The HUD is drawn **once**, to an off-screen texture, and composed into each eye at the end of the frame as a flat
+panel hanging in front of the car (`Hud WorldLocked=1`: the panel is a point `Distance` metres ahead of the game
+camera seen through each eye's head pose; `0` glues it to the view). Three layers exist:
+
+* **HUD layer** (`g_hudTexture`): normal alpha-blended UI. Drawn with separate alpha blending so the layer keeps a
+  proper coverage alpha (over-blend for normal draws, alpha preserved for additive ones).
+* **Multiply layer** (`g_multiplyLayer*`): multiplicative blends (dark glass behind menu panels); starts white and is
+  multiplied over the scene.
+* **Top layer** (`g_topLayer*`): things the game draws straight to the screen *before/over* the UI, e.g. the connecting
+  spinner, popups' veils; composed after the HUD, optionally with a veil.
+
+Because the game's menus and HUD rely on being drawn over the live scene, a set of **heuristics** decides what goes
+where. They are the most fragile part of the mod; they were tuned in the headset, one screen at a time:
+
+* a draw goes to the HUD when it targets the back buffer after the scene, is alpha blended (or reads only small
+  textures), and is not the opaque full-screen scene composite (`composite` test: shader-less blit or opaque draw that
+  samples a >= 0.9 back-buffer-wide RT texture);
+* rear-view-mirror picture = a wide short RT texture (>= 300 wide, aspect between 3 and 12, **not of the back buffer's own shape**,
+  `HasBackBufferShape`) composited into the main image (see section 16 for why the last part is needed);
+* menu UI composed into its own off-screen target before the 3D scene is also redirected to the HUD layer;
+* **backdrop dropping** (`DropBackdrop`): the game puts a dimmed/blurred full-size copy of the scene behind its own
+  popups. That copy would blank our separate UI layer, so it is dropped (detected with an **occlusion query** on a
+  scratch target – `HudDrawCoversScreen` – or by texture size) and replaced by our own dim (`g_dimLevel`,
+  colour (12,6,28), smoothed) or by a veil in the top layer, with strengths `VeilRace`, `VeilResults`, `VeilMenu`,
+  `DimStrongPct`;
+* a loading/intro video is an opaque full-screen picture in the HUD layer (512x256 second texture); coverage is
+  measured on a 96x54 readback every 3rd frame and the layer is hidden while it is up (`HideFullscreenOverlay`);
+* HUD draws that sample a blurred scene RT work because the panel is composed late; only the final full-screen composite
+  is excluded.
+
+**UI glow / bloom** (`[Render] NoBloom`, `[Hud] UiGlow`). The game draws its 2D elements a second time into a small
+render target (540x267, or the full-size UI target in the showroom menus), blurs that into a ~135x66 glow texture and
+adds it over the finished picture in its last pass. That pass is mono and would smear across both eyes, so it is
+intercepted instead: the glow texture is noted (`NoteSceneBloom`, one frame only) and its draw skipped, and
+`ComposeHudLayers` adds it (`addGameGlow`, ONE/ONE, strength `UiGlow`) over the world-locked layer quads, which follow
+the UI in each eye. Identification is structural (render-target sizes, additive blend onto the back buffer), never by
+shader id (ids differ between runs). Showroom menus: the UI draws are also run into the game's own UI target
+("shadow" draw) so its glow chain has something to blur, and its final pass is skipped. In the race the glow-buffer
+UI draws are kept (`g_menuGlowFrame`), except those that sample a render target (mirror picture, scene), so only the
+2D elements glow. Flat loading screens simply let the game's glow pass run. `NoBloom=1`
+disables all of it (the UI draws into the glow buffers are then skipped, as they would smear across both eyes).
+
+**UI clipping with the stencil buffer** (always on). The game clips its UI with stencil, not scissor or viewport (the
+log shows scissor off and the full viewport on every UI draw): a *mask draw* (`STENCILFUNC=ALWAYS`, `STENCILPASS=REPLACE`,
+reference 1..3, additive blend of black so it paints nothing) writes the region id, and the draws that must be clipped use
+`STENCILFUNC=EQUAL` with that reference. This is what clips the scrolling car lists in the showroom. The layers used to have
+no depth-stencil surface, so every one of those tests silently passed and the lists spilled out of their frame. Now all
+layers share one D24S8 surface (`g_hudDepth`, layer-sized; the game also has one stencil buffer for its whole UI):
+`BeginLayerDepth` swaps it in for the game's own surface (only when the game had one bound) and forces depth test and write
+off, as before; it is cleared once per frame at the first layer draw (`ClearHudStencilOncePerFrame`) and whenever the game
+clears the stencil of the surface it draws its UI with (`H_Clear` -> `OnGameStencilClear`, matched by surface pointer).
+Colour-write-off draws (`cw=0`) used to be skipped; they now run into the stencil buffer only. A UI draw that is dropped
+(backdrop copies, intro pieces) but writes the stencil is still run stencil-only (`DrawHudStencilOnly`), otherwise the draws
+clipped by it would vanish. If the stencil buffer cannot be created the UI simply stays unclipped (logged). The log lines to
+look for start with `UI stencil:`.
+
+**Photo viewer** (`photo_stereo.cpp`). The game saves photos to `%APPDATA%\bizarre creations\blur\photo\*.jpg` from the frame it
+rendered, so in VR they are the side-by-side picture (2160x1071 here: left eye | right eye). The menu's viewer loads the file
+into a full-size render-target texture and draws it with the UI shader (`vs=256 ps=387`) onto the back buffer: blended in the
+photo list, then opaque once a photo is opened. The opaque draw samples a >= 90% render-target texture, so the "composite" rule
+leaves it untouched (plan 0) and the finished picture is head-locked on the lenses, huge, and each eye shows its own half
+(scaled, shifted, but nothing like a screen in the world). `IsPhotoDraw` recognises the photo's texture (the first UI-shader
+draw of a full-size render-target texture within 3 s of the file being opened picks it) and then every back-buffer draw that
+samples it in slot 0 while the 3D menu scene is on; `DrawPhotoStereo` runs those once per eye into the per-eye layers (`g_mirrorSurface`, which therefore always exist) with a per-eye texture that holds that eye's half
+of the photo, 1:1 and centred on a transparent background (`PreparePhotoEyeTextures`); `ComposeHudLayers` shows the layers on
+the HUD panel below the HUD. The two halves are not a ready pair on a flat panel: each was rendered with its own off-axis
+projection (tangent box), so the point at infinity is at `-left / (right - left)` of its image (about 60% in the left one and
+40% in the right one). `PhotoShifts` moves each image so that point lands in the middle (infinity on the panel, nearer things in
+front), and both eyes are trimmed to the window they have in common, so no strip is seen by one eye only. The capture-time
+tangent boxes are not in the file, the current headset's are used. This was judged right in the headset as it is (a depth
+and a crop setting with live keys were tried and removed: a larger separation was no better than this plain alignment). The
+viewer's other draws (the blurred backdrop pair, drawn with the 2160x1071 render target and
+the tone-mapping constants) are still dropped by the backdrop rule. A non-stereo photo (taken without the mod) would be split in
+halves too. (How it was found: dumping the submitted picture and each layer to files showed the photo baked into the back buffer
+but absent from every layer; the temporary dump code is gone, `GetRenderTargetData` of the back buffer / a layer in
+`VrSubmitFrame` is the way to do it again.)
+
+Known: popups still look slightly dim (`Veil*` settings); root cause never found.
+
+## 7. VR session, menus, loading
+
+* **Deferred start** (`DeferVR`): the game stays flat (SteamVR theatre) until the first level starts loading and a
+  3D menu scene is really drawn, then OpenVR is initialised. **Threaded init** (`ThreadedInit`): OpenVR is started on
+  a worker thread because the game stalls ~0.75 s loading the intro videos right after device creation, and SteamVR
+  marks a scene app that misses that long as "not responding" and throws up the dashboard.
+* Pose: `WaitGetPoses` runs right after `Present` (VR_NextPose), so the pose is ready when the next frame starts.
+  **Tracking space is SteamVR's seated space** (`SetTrackingSpace(Seated)`; menu overlay in the same space), so the
+  reference for "straight ahead" is SteamVR's own zero pose, not something the mod remembers. A recentre in SteamVR
+  therefore just works. The mod's own recentre (`F9`; also at every race start if `AutoRecenter=1`, the default) calls `IVRChaperone::ResetZeroPose(Seated)`, i.e. the
+  same thing as SteamVR's recentre, and logs the head pose it found. Only if the chaperone interface cannot be
+  obtained does it fall back to remembering a reference pose itself (`refYaw` / `refPos`). The
+  `SeatedZeroPoseReset` / `StandingZeroPoseReset` events only re-place the floating menu.
+* Frame transport: back buffer → `StretchRect` to a render target → `GetRenderTargetData` to system memory →
+  `UpdateSubresource` into a D3D11 texture created on the adapter SteamVR wants (`GetDXGIOutputInfo`) → `Submit`.
+  This is a CPU round trip and a real cost; a shared-handle texture would avoid it (idea, section 10).
+* Menu: dark scene layer submitted to both eyes + the game image on a `SetOverlayTransformAbsolute` overlay placed
+  flat in front of the head (re-placed for a few frames when the dashboard is up or after a recentre because the
+  pose is unreliable then).
+* **Movies** (tutorial videos, cutscenes, credits: Bink files in `UI\movies\*.bik`, decoded by `binkw32.dll`). The game stops
+  drawing its 3D scene and plays the video full screen, so those frames go to the floating screen like any flat frame, but it
+  keeps drawing its menu UI under the video, and that UI (diverted into the HUD layers) was composed over the picture. A
+  `.bik` file open (seen by the `CreateFile` hook, `OnGameFileOpen`) arms `g_moviePhase`; the first frame without scene draws
+  makes it "playing" (`UpdateMovieState`, called from `VrSubmitFrame`), and the first frame with scene draws ends it (an armed
+  state that never sees the scene stop times out after 8 s). While playing, `ComposeHudLayers` composes nothing. Log lines:
+  `movie opened: ...`, `movie: the 3D scene stopped ...`, `movie: over ...`.
+* Hotkeys: F8 mode override, F9 recentre, F10 head tracking on/off.
+
+## 8. Resolution and display modes
+
+**Why 4K looks better on a 1080-per-eye headset.** The lens warp needs about 1.4x supersampling (SteamVR's default for
+a Vive is 1512x1680 per eye); the SBS target at 3840x2160 is 1920x2160 per eye, which also smooths shimmer. 1920x1080
+gives only 960x1080 per eye.
+
+**Custom resolution** (`CustomWidth/CustomHeight`, default 2160x1200). The game lists the adapter's display modes; the mod
+wraps `GetAdapterModeCount` / `EnumAdapterModes` (IDirect3D9 vtable slots 6 / 7) to add one more entry
+(per refresh rate already present, kept sorted). A size the monitor does not have cannot be full-screen, so
+`CreateDevice` / `Reset` (`AdjustPresentParams`) turn such a request into a **windowed** back buffer; only the headset
+sees the picture. Slot 16 is `CreateDevice`.
+
+**V-Sync** (`[Render] ForceNoVSync`, default 1). The game saves `vsync="1"` in its settings and presents with a V-Sync wait, which held it at the monitor's 60 Hz (the watchdog lines in the log counted 60 presents per second) whatever the headset's refresh rate, so SteamVR had to reproject every frame. `AdjustPresentParams` (`CreateDevice` and `Reset`) now sets `D3DPRESENT_INTERVAL_IMMEDIATE`; `WaitGetPoses` right after `Present` is what paces the game to the headset. It does nothing when `Enabled=0`. If a game version ties its simulation speed to the frame rate, set 0 and turn V-Sync off in the game's video options (or leave it on).
+
+**Frame cap** (`[Render] MaxFps`, default 0 = none; `frame_limiter.cpp`). Some people hear audio stutter at high frame rates, so the game can be held to a rate, for example 60. `LimitFrameRate` runs in `H_Present` after `Present` and before `VrUpdatePose` (`WaitGetPoses`), so the wait does not make the next frame's pose older. It keeps a steady slot cadence (a late frame is not made up for) and waits on a high-resolution timer, spinning the last 2 ms. Measured on its own at 60 / 30 fps: 60.0 / 30.0 fps. A cap below the headset's refresh rate makes SteamVR reproject the frames in between.
+
+## 9. Settings reference (BlurVR.ini)
+
+`[General]` Enabled, Log (0), AutoRecenter (1), RecenterKey (0x78 F9), ToggleKey (0x79 F10), ModeKey (0x77 F8), StartMode (0 auto /
+1 floating screen / 2 race), ThreadedInit, DeferVR.
+`[Tracking]` Rotation, Position, PositionScale (game units per metre), IpdScale.
+`[Render]` CustomWidth/CustomHeight (2160/1200), ForceNoVSync (1), MaxFps (0), Stereo, FovScale, SeamGutter (0), NoLensFlare (0; 1 drops the flare sprites and the
+bloom/glow around lights), NoBloom (1 = no glow around 2D UI: menus, loading screens, HUD, pause, car selector); undocumented tuning: MainPassMinWidthFraction (0.9),
+RequireDepthBuffer, HalfResPasses, ReflectionLookupFix, ReflectionFlip; SharedTransport (section 15), StartAtSavedSize (1), StartWidth/StartHeight (0, section 16), `[Hud]` CoverageEvery (8, section 18); `[Render]` DesktopPresentEvery (1, section 18).
+`[Hud]` WorldLocked, Scale (0.6, fraction of one eye's width), Distance, OffsetY, XOffset, Mirror3D (1),
+MirrorConvergence (1.5), MirrorEyeScale (1), MirrorHeadParallax (1), UiGlow (strength %, 100),
+VeilRace, VeilResults, VeilMenu, DimStrongPct, CountInDrop (1), DropBackdrop, HideFullscreenOverlay.
+`[Menu]` Distance, Width, HeightOffset.
+`[Matrix]` Layout (`auto`|`row`|`transposed`).
+`[Debug]` KeyMirror3D (Num6), KeyPerf (Num7), KeyDump (Num8; section 16), AdjustViewRotation.
+`[Perf]` Enabled (0; the probe in section 13).
+`[Foveation]` Report (1; the lens analysis in section 13).
+
+## 10. Known limits, features, ideas
+
+### Stereo rear-view mirror (finished feature)
+
+Settings: `[Hud] Mirror3D`, `MirrorConvergence`, `MirrorEyeScale`, `MirrorHeadParallax` (defaults 1, 1.5, 1, 1);
+Num6 toggles it live (`PollSwitchKeys`, `vr_runtime.cpp`; each press is logged as `switch: ...`). Code: `mirror_stereo.cpp`. Confirmed working in the headset. The game renders the mirror into a small wide render target (e.g. 864x160). While Mirror3D is
+on, each 3D draw into it (`IsMirrorScenePass`) is run twice by `DrawMirrorSceneStereo`: once per half of the target
+(left half = left eye), with the rear camera moved to that eye. The eye offset is taken from `eyeCameraDelta`, turned
+into world space with the main camera's axes (`NoteMainCameraAxes`) and into the rear camera's space with its own
+axes (`RecoverCamera`); the projection gets a horizontal shear so that things `MirrorConvergence` metres away have no
+disparity (nearer pops out of the panel, farther recedes). When the UI draw of the mirror picture comes
+(`g_drawIsMirror`), `PrepareMirrorEyeTextures` stretches each half into its own full-size texture and the draw is run
+twice, into the per-eye layers `g_mirrorSurface[eye]`; `ComposeHudLayers` draws each eye's layer on the HUD panel
+(same place and distance as the UI). If the rear camera cannot be recovered the picture stays mono (log line
+"rear camera not recovered"). The game flips the picture in the UI draw, not in its projection.
+
+Known limits:
+
+* **Culling** by the game's narrow camera frustum (objects missing at the edges when looking far off the travel
+  direction). A fix would widen the game's own FOV-for-culling; not attempted.
+* Popups slightly dim; HUD detection is heuristic; menus are a flat screen.
+* Cockpit camera, side culling and right-stick look untested.
+
+Ideas (none started):
+
+* Lens-matched / foveated shading in software: render the centre of each eye at higher density than the edges. Planned as a
+  focus tile + half-density context tile per eye (four views in the one main-sized target), staged behind measurements;
+  section 13 has the measuring tools and the numbers to look at first. OpenVR also has `GetEyeTrackedFoveationCenter`,
+  which a later gaze-driven focus could use.
+* HUD layer at higher resolution than the back buffer. (Tried and removed: layers with mip-maps and/or at 2x size. The HUD
+  is 2160 px wide but shown about 650 px wide per eye, so small text shimmers, but mip-maps were too soft and the game's UI
+  textures only exist at 1x, so 2x added no detail; draws with pre-transformed vertices also ignore a viewport scale.)
+* Shared-handle texture to skip the CPU round trip in frame transport.
+
+## 11. How to investigate a new rendering problem
+
+This is the loop that produced every per-eye fix:
+
+1. Find the pass: add temporary logging in `RunDraw` for the symptom (draw count, bound VS/PS ids, render target
+   size, `g_boundTextures`, the constants from `g_vsConstants` / `g_psConstants`). Identify the shader by constant names
+   (`ParseVertexShaderConstants` / `ParsePixelShaderConstants` already record them).
+2. Dump the pixel shader bytecode (the token stream in `H_CreatePixelShader`) to a file, then
+   `python3 tools/ctab.py file.bin` lists constants with registers, and `python3 tools/dis.py file.bin` disassembles.
+3. Work out what the shader assumes about the camera (UV range, centre, frustum corners, view-space light
+   positions, matrices in UV space).
+4. Express the same transform for one eye (`BuildEyeProjection`, `eyeCameraDelta`), usually as a left-multiplication
+   of the constant by a small matrix, and draw the pass once per eye with the eye half as scissor.
+5. Ask for a screenshot of the symptom at a fast, cluttered moment (shadows and motion blur show up best at speed
+   with a CPU car nearby); compare with the log.
+
+For screenshots the frame dump (Num8, `frame_dump.cpp`) does the job: it saves the finished side-by-side picture and each HUD layer, so a report can show exactly
+what was sent to the headset.  For a temporary look at the draws, add logging in `RunDraw`; the logging that was used for that during development is in
+`experiments/diagnostics-removed-in-1.1.patch` (section 19).
+
+## 12. Code map
+
+Everything is in `src/`; `build.sh` compiles all `*.cpp` into one `d3d9.dll`.  Dependencies run downwards in this table
+(device_hooks and draw_dispatch sit on top of everything else).  `common.h` holds the shared includes and the `DrawCall`
+callback type; each module header lists what the module exports (with one-line comments).
+
+| Module | Purpose | Functions (definitions in the .cpp) |
+|---|---|---|
+| `core` | Module location, log file and logging. | `Log` |
+| `config` | BlurVR.ini settings.  Every key has a default; see the settings reference in NOTES.md. | `IniFilePath`, `ReadIniInt`, `ReadIniDouble`, `LoadConfig` |
+| `matrix` | 4x4 matrices in double precision, row-vector convention (like D3DX). | `Identity`, `Multiply`, `Invert`, `LoadMatrix`, `StoreMatrix` |
+| `d3d_hooks` | Loading the real d3d9.dll, vtable patching, and the Direct3D function-pointer types the hooks use. | `LoadRealD3D9`, `PatchVtable` |
+| `shader_tracking` | Shader bookkeeping: constant tables of every vertex/pixel shader the game creates, the constants it uploads, and the shaders currently bound. | `NamesEqual`, `ParseVertexShaderConstants`, `ParsePixelShaderConstants` |
+| `game_mode` | Menu / race detection: the game opening files below "levels\" tells us which scene is loading. | `IsRaceMode`, `IsMovieFrame`, `UpdateMovieState`, `OnGameFileOpen`, `H_CreateFileA`, `H_CreateFileW`, `PatchModuleImports`, `InstallFileOpenHooks` |
+| `vr_runtime` | OpenVR / SteamVR session: initialisation, head pose, per-eye camera deltas, floating menu screen, and submitting the finished frame to the compositor. | `ReleaseStagingResources`, `EnsureStagingResources`, `EnsureFrameTexture`, `SplitVerticalTangents`, `VrInit`, `VrUpdatePose`, `PlaceMenuOverlay`, `VrSubmitFrame`, `StartVrInitThread`, `VrInitThread` |
+| `render_state` | What the game is rendering into right now (render target, viewport, scissor, bound textures) and classification of the current pass (main scene, half-size, reflection). | `RefreshRenderTargetState`, `IsMainSizedTarget`, `IsHalfResPass`, `IsReflectionSizedPass`, `IsMainPass` |
+| `camera` | Recovering the game camera/projection from g_mViewProj and building the headset projection for each eye. | `DecomposeViewProjection`, `TryRecoverProjection`, `BuildEyeProjection` |
+| `stereo_scene` | Stereo duplication of main-pass draws: rewriting the tracked shader matrices for one eye (the products that do not change from draw to draw are cached, section 14). | `ReflectionColumnsMatch`, `GetRewrite`, `RecordRemap`, `ApplyEyeConstants`, `RestoreEyeConstants`, `ApplyCameraShift` |
+| `device_state` | What the device holds versus what the game believes (vertex constants, scissor): per-eye changes are undone lazily and redundant writes skipped (section 14). | `DeviceNoteGameVsConstants`, `DeviceSetVsOverrides`, `DeviceSetEyeScissor`, `DeviceRestoreAll`, `DeviceStateReset` |
+| `mirror_stereo` | Rear-view mirror rendered once per eye (see section 10). | `IsMirrorScenePass`, `DrawMirrorSceneStereo`, `PrepareMirrorEyeTextures`, `NoteMainCameraAxes`, `ReleaseMirrorStereo` |
+| `photo_stereo` | The main menu's photo viewer: its picture (a side-by-side photo) drawn once per eye into the per-eye layers (see section 6). | `IsPhotoDraw`, `PreparePhotoEyeTextures`, `DrawPhotoStereo`, `ReleasePhotoStereo` |
+| `draw_dispatch` | Per-draw-call dispatch: decide how each game draw is handled and run it. | `ClassifyDraw`, `RunDraw` |
+| `hud` | HUD / UI layers: draw the game's 2D UI into off-screen layers and compose them into each eye as a world-locked panel. | `ComputeHudViewport`, `ReleaseHud`, `EnsureHudTargets`, `HudDrawCoversScreen`, `DrawHudToTexture`, `DrawHudToMultiplyLayer`, `DrawHudStencilOnly`, `OnGameStencilClear`, `ComposeHudLayers`, `IsMultiplicativeBlend` |
+| `streaks` | Light-streak sprites: captured in a layer and re-projected into each eye. | `ReleaseStreakLayer`, `EnsureStreakLayer`, `DrawStreakToLayer`, `FlushStreakLayer` |
+| `screen_space_passes` | Per-eye versions of the game's screen-space passes: motion blur, shadow decals, deferred lights, and the bloom blackout for `NoLensFlare`. | `DrawWithoutBloom`, `MotionBlurPerEye`, `ScreenZMapping`, `ApplyShadowDecalForEye`, `TransformPoint`, `TransformDirection`, `FindFarCornerRegister`, `DrawLightsPerEye`, `ApplyLightVolumeForEye` |
+| `device_hooks` | The IDirect3DDevice9 hooks: state tracking, shader tracking, draw interception, Present/Reset. | `H_Present`, `H_Reset`, `H_Clear`, `H_CreateTexture`, `H_SetRenderTarget`, `H_SetDepthStencilSurface`, `H_SetViewport`, `H_SetRenderState`, `H_SetScissorRect`, `H_SetTexture`, `H_CreateVertexShader`, `H_SetVertexShader`, `H_SetVertexShaderConstantF`, `H_CreatePixelShader`, `H_SetPixelShader`, `H_SetPixelShaderConstantF`, `H_DrawPrimitive`, `H_DrawIndexedPrimitive`, `H_DrawPrimitiveUP`, `H_DrawIndexedPrimitiveUP`, `HookDevice` |
+| `perf_probe` | Timing probe (section 13): GPU time per rendering phase from timestamp queries, CPU time of the draw hooks and the present path. | `PerfToggle`, `PerfSetPhase`, `PerfClassifyDraw`, `PerfFrameClose`, `PerfPoll`, `PerfScope`, `PerfDrawScope`, `PerfDriverScope` |
+| `lens_model` | Lens analysis (section 13): pixel need across the flat image, hidden area, focus/context layout costs. | `StartLensReportThread` |
+| `frame_dump` | Numpad 8 saves the picture sent to the headset and the HUD/top/multiply layers as .bmp files (section 16, 19). | `FrameDumpPoll` |
+| `window_spoof` | Section 16: answers the game's window-size queries (GetClientRect, WM_SIZE) with the size it asked for when Windows clamped the window to the desktop. | `InstallWindowSizeSpoof`, `WindowSpoofIntendedSize`, `ReadSavedVideoSize` |
+| `frame_limiter` | Frame rate cap (`MaxFps`): waits after Present so the game does not run faster than the cap. | `LimitFrameRate` |
+| `display_modes` | Extra display mode for the game's resolution list, and the IDirect3D9 hooks. | `BuildModeList`, `H_GetAdapterModeCount`, `H_EnumAdapterModes`, `AdjustPresentParams`, `H_CreateDevice`, `HookDirect3D` |
+| `dllmain` | d3d9.dll exports (forwarded to the real d3d9.dll) and DllMain. | `Direct3DCreate9`, `Direct3DCreate9Ex`, `RealProc`, `D3DPERF_BeginEvent`, `D3DPERF_EndEvent`, `D3DPERF_SetMarker`, `D3DPERF_SetRegion`, `D3DPERF_QueryRepeatFrame`, `D3DPERF_SetOptions`, `D3DPERF_GetStatus`, `DllMain` |
+
+### Source layout
+
+* `src/` is the current code, split into the modules above.
+* `archive/` holds earlier single-file versions of the code, for reference only (not built).
+
+## 13. Measuring before foveating: the timing probe and the lens analysis
+
+Both only write `BlurVR.log`; neither changes the picture.
+
+**Timing probe** (`perf_probe.cpp`; `[Perf] Enabled=1`, or Num7 in game to switch it on and off). Once a second, while a race is
+running, two lines:
+
+* `perf: <fps>, frame <ms> | cpu per frame (ms): draw hooks (driver, mod = us/draw), hud compose, readback, upload, submit,
+  present+limiter, pose wait, game and other | draws per frame: game, issued`. `readback` is `StretchRect` +
+  `GetRenderTargetData`, which waits for the GPU, so a large number there means the GPU is the limit; `pose wait` is the
+  `WaitGetPoses` pacing wait, so a large number means neither side is the limit. `mod` is the time in `RunDraw` that is not the
+  game's own draw call. `issued / game` is the duplication factor.
+* `perf: gpu <ms> per frame: <phase> <ms> (<draws>) ...` with the phases `offscreen` (shadow maps, odd-shaped targets),
+  `scene-main` (the stereo-duplicated geometry pass), `scene-half` (reflection, glow sprites), `lights`, `motion-blur`,
+  `main-other` (composite, tone mapping), `post-low` (bloom chain), `hud`, `hud-compose`, `copy` (the frame for the compositor).
+
+How it works: `RunDraw` classifies every draw (`PerfClassifyDraw`: HUD plan, light/motion-blur pixel shader, target size and
+shape), and each change of phase issues a D3D9 timestamp query; the time between two stamps goes to the phase active in
+between. Results are read after `Present` without waiting. `VrSubmitFrame` sets `hud-compose` and `copy` by hand
+(`PerfSetPhase`), which also stops the classifier for the rest of the frame. A phase that flips back and forth many times
+costs stamps (192 per frame, then the frame is reported as `too many phase changes`). The timing itself costs a few
+queries and two `QueryPerformanceCounter` reads per draw, so leave it off when not measuring.
+
+**Headset facts** (`lens_model.cpp`; `[Foveation] Report=1`, on by default, once after VR starts): one `lens:` line with model,
+refresh rate, SteamVR's own render size, eye-gaze support / `GetEyeTrackedFoveationCenter`, and the share of the flat image
+the hidden-area mesh covers (`GetHiddenAreaMesh` returns its 8-byte struct in EDX:EAX on 32-bit x86, so it is called as
+returning `unsigned long long`).
+
+**Lens study, offline** (`tools/lens_dump.cpp`, `tools/lens_layouts.py`). With SteamVR running (the game need not be),
+`lens_dump.exe <folder>` writes the runtime's distortion function on a 65x65 panel grid and the hidden-area mesh to CSV. The
+script turns that into: the area of flat image per unit of panel area (the Jacobian of `ComputeDistortion`), which is smallest
+at the sharpest spot; `need = smallest area / local area` is the pixel density a place really needs relative to that spot.
+Cells whose position falls outside the flat image (the explosive corners of the polynomial) or inside the hidden-area mesh are
+left out; as a check, the lens shows 75 percent of the flat image and the mesh covers 25. It then finds the cheapest set of
+nested rectangular tiles (each at one density, overlapping, no holes) for 2, 3 and 4 tiles per eye, strictly (every place gets
+at least its need) and with `--tolerance` (need relaxed with eccentricity: 15 deg full, then down to a quarter of the density at
+50 deg; a scenario to judge in the headset, not a measurement). Costs are relative to a flat image whose density is 1:1 with the
+panel at the sharpest spot.
+
+### First measurements (Valve Index, RTX 3060, i7-11700K, game at 2160x1071, race with CPU cars)
+
+* The Index wants 4936x2740 side by side from SteamVR (13.5 MP); the mod renders 2.3 MP. A flat image that is 1:1 with the
+  panel at the sweet spot has 2.5x the panel's 2.3 MP per eye, about 11.6 MP side by side. The picture is therefore soft mainly
+  because it is under-sampled at the centre (0.45x linear), not because the periphery wastes pixels.
+* Lens: the sharpest spot is at tangent x -0.23 (left eye) / +0.23 (right eye), y 0, not at the middle of the tangent box. The
+  hidden-area mesh is 25 percent of the flat image. The ideal continuous lens-matched warp would cost 32 percent of a flat image.
+  Strict-need rectangular tiles: 2 tiles per eye 81 percent (focus box 26 percent of the image at full density, context at 74
+  percent linear), 3 tiles 83, 4 tiles 88 (overlap with no holes eats the gain). With the eccentricity tolerance: 2 tiles 59,
+  3 tiles 56. So a focus + context inset only pays if the periphery may be rendered clearly below the lens-matched need.
+* Frame (race, about 58 fps against the headset's 90 Hz): 17.2 ms. CPU on the render thread about 13.4 ms: the draw hooks 6.3 ms,
+  of which the mod's own work is 4.7 ms (1.45 us per game draw, 3261 game draws become 6155 issued), the game and everything else
+  7.1 ms; then the end-of-frame stall: `StretchRect` + `GetRenderTargetData` + `LockRect` wait about 2.8 ms (the `readback`
+  scope reads 0, the wait lands in `upload`), and a GPU `copy` phase of 3.35 ms for the 9 MB frame. Pose wait is 0.4 ms, so the
+  game is late for every 90 Hz frame.
+* The GPU timestamps include time the GPU waits for the CPU to issue draws (the draws arrive at the CPU's pace: `scene-main`
+  takes about 2.2 us per game draw, the same as the hooks), so the phase times are upper bounds on GPU load. GPU phases:
+  scene-main 4.3, main-other 5.1 (7-10 full-screen draws), offscreen 2.0, copy 3.35, hud 1.0, scene-half 0.6, post-low 0.3,
+  lights 0.3. The frame is CPU-limited and then serialised by the readback; whether the GPU has headroom is answered by a
+  resolution sweep, not by these numbers.
+* Consequences: the readback grows with the pixel count (about 3.35 ms of GPU copy per 2.3 MP, so about 7.4 ms at 5 MP and far
+  more at 11 MP), so higher resolution needs the shared-texture transport first; the mod's per-draw cost (4.7 ms) has to come
+  down before any extra view is added.
+
+## 14. Per-draw cost: where the mod's time goes, and the lazy device state
+
+Measured in game with the timing probe (section 13): the mod's own time in `RunDraw` was 4.7 ms per frame (1.45 us per game draw, 3261
+game draws, 6155 issued). The matrix maths is cheap (host micro-benchmarks, section below: a 4x4 `Invert` 57 ns, `Multiply` 18 ns,
+`LoadMatrix` 5 ns, `StoreMatrix` 7 ns). What costs is the **number of Direct3D 9 calls** the mod adds around every duplicated draw: per
+plan-1 draw, a `SetRenderState` and three `SetScissorRect`/`SetRenderState` calls for the scissor, and two uploads per tracked matrix per
+eye (rewrite, then restore), about 31,000 extra device calls per frame, each of them a call into the driver.
+
+**Lazy device state** (`device_state.cpp`). The per-eye draws change two things the game does not know about: the tracked vertex
+constants and the scissor test/rectangle. The mod now keeps a record of what it has overridden and of the game's own values (the
+shadow `g_vsConstants`, `g_gameScissor*`), and:
+
+* writes a register only when the device does not already hold that value (`DeviceSetVsOverrides`, `DeviceSetEyeScissor`);
+* puts the game's values back only when something other than another per-eye draw is about to use the device: `DeviceRestoreAll` runs
+  in `RunDraw` for every draw that is not plan 1, and in the `Clear`, `SetRenderTarget`, `Present` and `Reset` hooks. Registers an
+  eye draw overrides but the next one does not write are restored by `DeviceSetVsOverrides` itself;
+* learns about the game's own writes from the hooks (`DeviceNoteGameVsConstants` from `H_SetVertexShaderConstantF`,
+  `DeviceNoteGameScissorEnable/Rect` from the scissor hooks), because a register the game writes holds the game's value again;
+* treats whatever may have run in between as unknown after every restore: the first write after a `DeviceRestoreAll` is unconditional.
+
+At every draw the device holds exactly what it held when the game's values were restored after each eye; only the call count differs.
+**Rule for new code:** anything that draws or reads device state outside `RunDraw`'s plan-1 path must call `DeviceRestoreAll` first
+(the mod's state blocks `Capture()` the device, so they must see the game's state). `RestoreEyeConstants` restores at once and is what
+the mirror pass uses.
+
+Two more changes in the same path: the two eyes of a game draw are issued in the opposite order every other draw (the second eye
+of one draw and the first of the next are the same eye, so the scissor rectangle and any matrix the game did not change are already
+in place; the eyes cover separate halves, so the picture is the same), and the products that depend only on the projection, the
+eye box and the camera delta (`inverse(projection) * delta * eye projection`, and the same per reflection record) are cached under
+a key of those inputs (`GetRewrite`, `RecordRemap`; a changed input rebuilds them, so no explicit invalidation exists).
+Small items: `VertexShaderInfo::ui` replaces the per-draw `otherConstantNames.find("g_Ui")` (four of those ran for every draw),
+`H_SetVertexShader/H_SetPixelShader` answer the shader lookup from a 16-entry cache (cleared when a shader is created),
+`IntroFrameLogging` reads the clock only while a trigger is pending.
+
+**Checking it: `tools/hotpath_check.cpp` + `tools/hotpath_check.py`.** The harness links every `src/*.cpp` except `dllmain.cpp` against
+a fake device, builds shaders through the real constant-table parsers, replays synthetic frames (shadow maps, reflection pass, scene,
+decals, light volumes, plain draws mixed into the scene, lights, post passes) through `RunDraw`, and hashes the whole device state
+at every draw (the draws of one `RunDraw` call are summed, so eye order does not matter) and at the end of every frame.
+`python tools/hotpath_check.py --src src --compare <old src folder>` builds both, runs eight configurations (default, transposed
+matrices, mono, seam gutter, a reflection flip mode, no reflection lookup, no view rotation adjustment, game scissor test on) and
+reports whether the hashes are equal; with `--no-bench` omitted it also prints nanoseconds per draw, at 0 and at 120 ns per device
+call. Mutations of `device_state.cpp` (skipping a restore, skipping the game-write notification) change the hash, so it does catch
+that kind of bug. What it does not cover: the hooks themselves (the flush points were checked by reading), anything on the GPU.
+Result for this change (synthetic frame of 3300 draws): hashes identical in all eight configurations; device calls per frame 30,800
+-> 10,700; modelled frame cost at 120 ns per call 5.8 ms -> 3.2 ms (the compute alone is about 0.1 ms higher). The real figure is
+the probe's `mod` value in game. `hotpath_check.exe micro` prints the cost of the matrix building blocks.
+
+Measured in game (Index, RTX 3060, i7-11700K, 2160x1071, race with CPU cars, 19 seconds of probe lines each):
+
+| | before | after the lazy device state |
+|---|---|---|
+| frame | 17.16 ms (58.4 fps) | 15.81 ms (63.3 fps) |
+| draw hooks | 6.32 ms | 5.29 ms |
+| of which the mod's own work | 4.72 ms (1.45 us per game draw) | 3.72 ms (1.14 us per game draw) |
+| game draws / issued draws per frame | 3261 / 6155 | 3263 / 6172 |
+| readback + upload wait | 2.77 ms | 2.74 ms |
+
+The saving is about 1.0 ms in the mod and 1.35 ms in the frame, less than the host model suggested (it assumed 120 ns per device call;
+the in-game saving of 20,000 fewer calls fits roughly 50 ns per call). What is left of the mod's 3.7 ms is mostly the per-draw
+compute (about 0.4-0.5 us per scene draw on a hot cache in the host harness, more in game where the game's own work evicts it) and the
+probe's own clock reads (a few hundredths of a ms per frame per 1000 draws). The frame is still CPU-limited: the game and the other
+hooks are 6.9 ms, the mod 3.7, the driver 1.6, and the end-of-frame wait 2.7.
+
+Second round (measured with cycle counters around the functions in the host harness, so only relative sizes count): the cache lookup
+`GetRewrite` was the largest single piece at 78 ns per call, because it built a 200-byte key and compared it with `memcmp`; comparing
+the inputs word by word against the cached key without building one brought it to 13 ns. `RunDraw` no longer divides for a seam
+gutter that is off and no longer calls the shadow-decal and light-volume helpers for pixel shaders that cannot use them. The probe's
+own clock is now the time stamp counter (a few ns instead of about 25 ns per read, four reads per draw), calibrated against the
+performance counter, so the probe's `mod` figure drops by roughly 0.3 ms from that alone, which is real for the probe but does not
+change the frame. Host cost per frame at no device-call cost: 1.54 ms -> 1.21 ms (the old code: 1.50). What is left per duplicated
+draw is about 150 ns per eye (matrix rewrite 50, device write 40-60, reflection records 20, cache lookup and checks 30), close to the
+floor for this design; the per-draw share of the remaining frame time is now the game's own 6.9 ms, the driver's 1.6 ms and the
+2.7 ms end-of-frame readback wait, which the shared-texture transport removes.
+
+Third measurement (after the second round; a different stretch of the race, so draws per frame are 6 percent lower): frame 15.24 ms (65.7
+fps), draw hooks 4.71 ms, mod 3.30 ms = 1.08 us per game draw (was 1.45 at the start; part of that is the cheaper probe clock),
+game and other 6.76, readback wait 2.85. Over the three runs the frame went 17.16 -> 15.81 -> 15.24 ms.
+The draw-by-draw list for the `main-other` phase (now including draws with no shader at all) shows that phase's 5.1 ms is almost
+entirely about 4.5 shader-less draws per frame ("ps -1 vs -1", 5.65 ms): fixed-function blits of a 2160x1071 target cannot take
+1.25 ms each on this GPU, so the time is the CPU gap that follows them, i.e. the GPU timeline is paced by the CPU and its phase
+times say little about GPU load. To measure real GPU busy time, bracket single draws with a stamp before and after.
+
+## 15. Shared-texture transport (`[Render] SharedTransport`, off by default)
+
+**Why.** The frame goes to SteamVR through the CPU: `StretchRect`, `GetRenderTargetData`, a lock that waits for the GPU, a copy into a
+Direct3D 11 texture. Measured in game it costs about 2.8 ms of CPU wait plus 3.3 ms of GPU copy at 2160x1071, and it grows with the
+pixel count. On this machine (`tools/shared_transport_check.cpp`, no game involved) the old way costs 3.4 ms per frame at 2160x1071,
+6.9 ms at 3024x1680 and 11.2 ms at 3840x2160; a shared texture costs 0.08, 0.14 and 0.20 ms.
+
+**What had to be found out first** (all tested on this machine with small programs):
+
+* A plain `IDirect3DDevice9` cannot create a shared texture (`D3DERR_INVALIDCALL` 0x8876086c for `CreateTexture` with a shared handle).
+  An `IDirect3DDevice9Ex` can, and Direct3D 11 opens it with `OpenSharedResource` (format B8G8R8A8, render target + shader resource).
+* An Ex device has **no managed pool** (`D3DERR_INVALIDCALL` for textures and buffers). A default-pool resource with
+  `D3DUSAGE_DYNAMIC` can be locked like a managed one: every format tried (A8R8G8B8, X8R8G8B8, DXT1/3/5, L8, A8, V8U8, A16B16G16R16F,
+  R16F, A4R4G4B4), mip chains, partial and read-only locks, cube and volume textures, vertex and index buffers (also with
+  `WRITEONLY`, `AUTOGENMIPMAP`). Only `D3DLOCK_DISCARD` on a level other than the top is refused, which a managed texture would refuse too.
+  `Reset` works with such resources alive; an Ex device is never lost.
+* `StretchRect` from the X8R8G8B8 back buffer into an A8R8G8B8 target works and sets alpha to 255.
+
+**What it does.** With `SharedTransport=1`: `Direct3DCreate9` returns an `IDirect3D9Ex` (same vtable layout for everything the game
+calls, `dllmain.cpp`); `H_CreateDevice` makes the device with `CreateDeviceEx` (slot 20; a windowed device needs no display mode, a
+fullscreen one gets one from the present parameters; on failure it falls back to a plain device and the old transport, `display_modes.cpp`);
+`H_CreateTexture/VolumeTexture/CubeTexture/VertexBuffer/IndexBuffer` turn `D3DPOOL_MANAGED` into default pool + `D3DUSAGE_DYNAMIC`
+(the first of each kind and up to 20 failures are logged: `SharedTransport: ...`); `H_Present` turns `S_PRESENT_OCCLUDED` and
+`S_PRESENT_MODE_CHANGED` into `D3D_OK`; the mod's own managed 4x4 texture (the `NoLensFlare` black texture) is default pool too.
+In `VrSubmitFrame`, a race frame is copied by `StretchRect` into a shared A8R8G8B8 render target (`CopyFrameShared`), an event query is
+waited on so the compositor never reads a half-written frame, and `Submit` gets the Direct3D 11 side of that texture. Menus,
+loading screens and the photo viewer still use the old path (they need the alpha fix-up of the CPU copy and are not time critical).
+Anything that goes wrong (no Ex device, shared texture not creatable, adapters differ so `OpenSharedResource` fails, the fence times out)
+logs one line and uses the old path for the rest of the run, per frame or for good.
+
+**Checking it.** `tools/ex_proxy_check.cpp` loads the built proxy like the game, with the setting on, and makes sure managed resources of
+every kind come back usable, drawing and `Present` work and `Reset` works. In game: the log has `SharedTransport: Direct3DCreate9Ex`,
+`CreateDeviceEx -> ... (an Ex device ...)`, `first managed ... turned into ...`, `shared texture WxH ready` and `first race frame
+handed over as a shared texture`; in the perf lines `readback` is now the `StretchRect` and `upload` the wait for the fence, and the
+`copy` GPU phase should drop from about 3.3 ms to a fraction of a millisecond. If textures are missing or wrong, a menu behaves
+differently, or the log shows `failed`, set `SharedTransport=0`: the game then runs exactly as before.
+Not covered by any test here: a real fullscreen Ex device, and whatever the game does with its managed resources beyond locking them.
+
+**First run in the game (SharedTransport=1): pickup icons were noise from far away and formed the right picture up close.** Cause, found
+with `t6`-style tests here: on an Ex device, a default-pool dynamic texture is locked with a **row pitch of at least 128 bytes for
+the small mip levels of uncompressed formats** (A8R8G8B8, L8, A8L8 ...; cube textures and the rows and slices of volume textures
+too), where a managed texture gave the tight pitch (width x bytes per pixel). The game's texture loader fills levels assuming the
+tight pitch, so every level whose tight pitch is below 128 bytes (32 pixels and under at 4 bytes) was written with the rows in the wrong
+places: the far-away (small) mips were garbage, level 0 was right. Compressed formats are unaffected. `texture_pitch.cpp` fixes it:
+the texture classes' `LockRect/UnlockRect` (and `LockBox/UnlockBox`) are hooked once (one vtable per class, shared by all textures), and
+for a texture that was remapped from the managed pool, a lock whose real pitch is not the tight one returns a staging buffer with the
+tight pitch (filled from the real surface unless `D3DLOCK_DISCARD`); on unlock it is copied back, row by row. Levels that already
+match, compressed textures and every other texture are untouched. Locks through `GetSurfaceLevel` surfaces are not covered. The
+proxy check (`ex_proxy_check`) fills a managed 2D texture and a managed volume texture level by level with the tight pitch and samples
+each level back: without the fix levels 4-7 (2D) and 1-4 (volume) are wrong, with it all are right. The log notes the first staged lock.
+
+The mod now keeps the log of the last real run: a launch that writes less than 20 KB does not replace `BlurVR.previous.log`, which
+`BlurVR.log` is copied to at the start of a launch when it is 20 KB or more (a second launch that was closed after seven seconds
+had erased the log of the run with the glitch).
+
+**Measured with SharedTransport=1** (Index, RTX 3060, i7-11700K, 2160x1071, 59 seconds of probe lines, after the pitch fix; the log
+shows the staged-lock note, `shared texture 2160x1071 ready (Direct3D 11 format 87, bind flags 0x28, misc 0x2)` and no failures):
+
+| | start | CPU rounds done, readback | SharedTransport=1 |
+|---|---|---|---|
+| frame | 17.16 ms (58 fps) | 15.24 ms (66 fps) | **12.62 ms (80 fps, up to 90)** |
+| wait for the GPU (`upload`; now the fence) | 2.77 ms | 2.85 ms | **0.15 ms** |
+| `copy` GPU phase | 3.3 ms | 3.4 ms | **0.48 ms** |
+| the mod's work per draw | 1.45 us | 1.08 us | 1.06 us |
+| pose wait (idle before the headset's next frame) | 0.39 ms | 0.38 ms | 1.07 ms (up to 3.9) |
+
+The frame now reaches the headset's 90 Hz limit part of the time (the pose wait is where it idles). The bracketed `main-other` draws
+(`each draw bracketed`) use 0.11 ms of that phase's 6.17 ms, so the rest of the phase is the gaps the CPU leaves between them: the
+GPU is mostly waiting for the CPU, not the other way round, and a higher resolution should cost little until the GPU saturates.
+
+**3840x2160 with SharedTransport=1** (55 seconds of probe lines; the game's `Reset` to the new size went through, the shared texture
+was rebuilt at 3840x2160, no failures in the log): 8.3 million pixels, 3.6 times the 2160x1071 run, and the frame cost only 1.1 ms more.
+
+| | 2160x1071 | 3840x2160 |
+|---|---|---|
+| frame | 12.62 ms (80 fps) | 13.70 ms (73 fps, 62-86) |
+| wait for the GPU (fence) | 0.15 ms | 0.36 ms |
+| `copy` GPU phase | 0.48 ms | 0.71 ms |
+| `scene-main` / `main-other` phases | 2.18 / 6.17 ms | 2.70 / 6.06 ms |
+| the mod's time per draw | 1.06 us | 1.69 us |
+| the bracketed `main-other` draws | 0.11 ms | 0.41 ms (the tone-mapping/colour pass, `ps 654`, is 0.32 ms of it) |
+
+The fence wait is the tail the GPU still has when the CPU has issued the last draw: 0.36 ms means the GPU is keeping up, so at this
+size the frame is still limited by the CPU (game 6.6 ms, hooks 5.6 ms of which the mod 4.7). The mod's per-draw time rose with the
+resolution (unexplained: more time inside device calls when the GPU has more queued is the likely cause). The GPU's own limit has not
+been reached yet; the next steps are to raise the render size further (SteamVR's own size for this headset is 4936x2740) and see
+where the fence wait starts to grow.
+
+**4936x2740 with SharedTransport=1** (60 seconds of probe lines, the size SteamVR itself asks for on an Index; `Reset -> backbuffer 4936x2740`,
+shared texture rebuilt, no failures): 13.5 million pixels, 5.8 times the 2160x1071 run. Frame 16.51 ms (60.7 fps, 54-69).
+
+| | 2160x1071 | 3840x2160 | 4936x2740 |
+|---|---|---|---|
+| pixels | 2.3 M | 8.3 M | 13.5 M |
+| frame | 12.62 ms | 13.70 ms | 16.51 ms |
+| the mod's time per draw | 1.06 us | 1.69 us | 2.63 us |
+| fence wait (GPU tail) | 0.15 ms | 0.36 ms | 0.59 ms |
+| pose wait (slack) | 1.07 ms | 0.62 ms | 0.44 ms |
+| `copy` GPU phase | 0.48 ms | 0.71 ms | 0.93 ms |
+| `scene-main` GPU phase | 2.18 ms | 2.70 ms | 3.88 ms |
+| the colour/tone-mapping full-screen pass (bracketed) | 0.08 ms | 0.32 ms | 0.57 ms |
+
+Reading: up to roughly 6 million pixels the frame is limited by the CPU (about 12.6 ms) and extra pixels are free; above that the GPU is the
+limit. Between the two larger sizes the frame grows by about 0.54 ms per million pixels, which puts 90 fps (11.1 ms) at roughly
+3 million pixels without any saving in the pixel work, and the CPU-side floor is 12.6 ms anyway. The mod's own time per draw grows with
+the resolution although it does no pixel work: the likely reason is that device calls wait for the GPU when its queue is full, so
+those milliseconds are the GPU pacing the CPU, not mod work. In the headset 4936x2740 still felt smooth (60 fps held by SteamVR's
+reprojection). What would lower the GPU side now: fewer shaded pixels (the 25 percent of the flat image the lens never shows, tiles at
+lower density), and trimming the fixed per-frame GPU work (shadow maps 1.7 ms, the double geometry pass).
+
+## 16. A back buffer wider than 3:1 (the game window clamped to a two-monitor desktop)
+
+The game saves its video mode in `%APPDATA%\bizarre creations\blur\settings.xml` (`<shared_graphical_settings width= height= windowed=>`) and,
+windowed, asks Windows for a window of that size.  Windows clamps a window to the virtual desktop, and the game then creates its device at the
+clamped client size: with two 1920x1080 monitors side by side a saved 4936x2740 started as 3854x1071 and a saved 3840x2160 as 3840x1071,
+about 3.6:1.  Picking a size inside the running game (a `Reset` with explicit sizes) is not clamped, so the same sizes worked from the options
+menu; only starting the game with a big size saved went wrong.
+
+What went wrong: the rear-view-mirror test (`ClassifyDraw`, "wide, short render-target texture, aspect between 3 and 12") also matched the
+game's scene texture, which has the back buffer's own 3.6:1 shape.  The final scene composite was then diverted as "the mirror picture" into the
+per-eye HUD layers instead of being drawn onto the back buffer: the menu showed one mono wide picture split over the two eyes (wide double
+vision), strips holding two shrunken copies of the side-by-side picture, and a back buffer that was never written so earlier frames showed
+through (a void with trails).  `HasBackBufferShape` (render_state.cpp) now keeps back-buffer-shaped textures out of both mirror tests
+(`ClassifyDraw`, `IsMirrorScenePass`); a real mirror picture (864x160, 5.4:1) is unaffected.  How it was found: `[Debug] KeyDump` (numpad 8) and
+`AutoDumpSeconds` (frame_dump.cpp) save the picture sent to the headset as `BlurVR_dump_*.bmp`, which showed the broken picture at the
+clamped start and a good one after a runtime change to 4936x2740.  Other places that assume a shape: the HUD panel keeps the back buffer's
+aspect (a 3.6:1 panel is wide and thin), and the 3.6:1 start has its pixels spread unevenly over the eyes (1927x1071 per eye for a field of
+view that is about square).  Starting with a size that fits the desktop, or picking the size in the options after the start, avoids both.
+
+**The same mistake after a Reset from the clamped start.**  Fixing the back-buffer shape was not enough: after a switch to 1920x1080 or 3840x2160
+inside the game the menu showed the whole side-by-side picture in a small window in each eye, in a void.  The draw capture (`cap f...` lines,
+armed by `FrameDumpPoll` at every dump) showed the final composite (`ps=505`) and the glow add (`ps=423`) classified as plan 2 where the
+clamped start had them as plan 0, with the same textures bound.  The game keeps (or rebuilds at the old size) its glow target after a Reset:
+it stayed 960x267 (the clamped start's quarter size) in a 1920x1080 game, still bound to a sampler when the composite ran, and a 3.6:1 render
+target passed the mirror test again.  Two changes: no mirror test at all in the showroom (the menu has no rear-view mirror), and
+`HasBackBufferShape` remembers every back buffer shape of the run (up to 8), so a buffer left over from an earlier shape is not a mirror.
+Lesson: shape alone is a weak test for "the mirror picture"; if it misfires again in a race, identify the mirror target by what is drawn into
+it (the rear camera's scene draws) instead.  `[Debug] AutoDumpSeconds=N` now dumps the picture and the layers N and 3N seconds after every
+back buffer size change and logs the draws of the next two frames, which is the quickest way to see where a draw was sent.
+
+**Starting at the saved size (`[Render] StartAtSavedSize`, default 1): what the game believes decides everything.**  With the mirror test fixed,
+a clamped start still showed a stretched intro video and a cut-off UI, because the game saves its video mode in settings.xml, Windows shrinks the
+window it asks for, and the game reads the shrunken window (the log: `CreateDevice request: back buffer 3854x1071, windowed 1, window client
+3854x1071, saved video mode 4936x2740`) and builds its device **and its own render targets** from that.  Three attempts and what they showed:
+(1) a back buffer of the saved size for a 0x0 request did nothing (the game passes a size); (2) raising the window's size limit
+(`WM_GETMINMAXINFO` through a thread hook) did nothing: the hook saw `max track 3860x1100` and raised it, the window stayed 3854x1071 client; (3) forcing the
+saved size as the back buffer although the game had passed the clamped one **broke the stereo**: the game's scene targets stayed 3854x1071 (and 3872x1088)
+while the back buffer was 4936x2740, so no target had the back buffer's shape, `IsMainPass` never matched and the scene was drawn once, mono, full
+width (log: `scene draws 148` instead of about 540, the capture lines show `rt=3854x1071` draws next to `rt=4936x2740(bb)`).  Lesson: **the game builds its
+targets from the size it passes, never from the device, so the device must be the size the game passes.**  The current approach (`window_spoof.cpp`)
+therefore changes what the game *reads*: it patches the user32 imports of the executable in DllMain (all modules again in `Direct3DCreate9`) and
+answers `GetClientRect` of the game's big top-level window with the saved size while the window is under 90 percent of it in either direction, until
+CreateDevice has returned (`WindowSpoofDeviceCreated`).  The game then passes the saved size itself, which is the state a Reset from the options
+menu gives.  The same file logs the first calls of `CreateWindowExA/W`, `AdjustWindowRect(Ex)`, `GetWindowRect`, `SetWindowPos` and `GetClientRect`
+before the device exists (`GetClientRect(...) -> WxH (answered with the saved size)`), so if the game finds its size another way (the window
+messages, `GetWindowRect`) the log shows which call it was.  `display_modes.cpp` logs the `CreateDevice request:` line and only fills in a 0x0 size.
+
+**The game resets itself to the real window 0.9 s after the start.**  The first spoofed run showed the start working (`GetClientRect(...) -> 3854x1071
+(answered with the saved size)`, `CreateDevice -> bb 4936x2740`) and then, 0.9 s later and with no call from the mod, `Reset -> backbuffer 3854x1071` with the
+intro movies opened again: the game compares its window with its device (or answers the window's first WM_SIZE) and resets to the real client
+size, which put the 3.6:1 picture, the stretched video and a UI strip back.  The window facts from the log: the game calls
+`AdjustWindowRect(4936x2740, style 16ca0000)` and `CreateWindowExA(... 4942x2769)`; `GetWindowRect` afterwards says 3860x1100 (the system's maximum).
+So the spoof now stays on: (1) `GetClientRect` of the game's top-level window answers with the size the game last asked for
+(`WindowSpoofIntendedSize`, set from the explicit size of CreateDevice and of every windowed Reset, starting with the saved mode) while the real
+client is under 90 percent of it, (2) the game window's procedure is wrapped (`GameProcHook`, installed from the `CreateWindowEx` hook) and its `WM_SIZE`
+carries that size too.  When the player picks another size in the options, the Reset's own size becomes the new "asked for" size, so a later
+window message or query cannot undo the choice.  Log lines to look for: `game window ...: window procedure wrapped`, `WM_SIZE WxH (passed on ...)`,
+`GetClientRect(...) ... [after the device]`, `window size spoof: the game's size is now WxH`, and the absence of a second `Reset -> backbuffer` at the start.
+
+**The game saves the clamped size, so the saved mode cannot be trusted (`[Render] StartWidth/StartHeight`).**  The run after the persistent-spoof build still
+started at 3854x1071 and the log said why: `window size spoof: saved video mode read (3854x1071)`.  `settings.xml` had been rewritten at 00:09:55, the second the
+game reset itself to the clamped window in the run before, and the game writes the size it was last reset to.  So one clamped start poisons the file and the
+next start asks Windows for exactly the clamped size (`AdjustWindowRect(3854x1071)`, `CreateWindowExA ... 3860x1100`), which gives the spoof nothing to answer
+with.  `StartWidth`/`StartHeight` in BlurVR.ini (default 0 = use settings.xml) name the size to start at instead; the spoof answers with it whenever the real
+window is under 90 percent of it.  Starting the VR session earlier would not help with the superwide intro video: the video is drawn into the back buffer, whose
+shape is the clamped window's, in the headset as much as on the desktop.
+
+**Result.**  With `StartWidth=3840`/`StartHeight=2160` the start was confirmed good in the headset: log `CreateDevice -> bb 3840x2160`, the intro video and the menu
+right, one later `Reset -> backbuffer 3840x2160` (the game answering the window's first `WM_SIZE`, which the wrapper turned into the size it asked for, so the
+size did not change).  The timed dump is left off (`AutoDumpSeconds=0`; it also arms the draw capture, which fills the log); numpad 8 still saves one set on demand.
+
+## 17. Hidden-area cull (tried, no gain, removed from the build)
+
+**The code is kept in `experiments/hidden_area/` (not compiled).  To try it again: copy the two files into `src/`, add the ini keys `[Render] HiddenAreaCull` / `HiddenAreaMargin` (config.h/.cpp), call `HiddenAreaNoteDepthClear(z)` from `H_Clear` for a depth clear of a main-sized target and `HiddenAreaBeforeMainDraw(device)` at the top of the plan-1 branch of `RunDraw` (`IsMainPass()`).  The text below describes it as it was.**
+
+**Idea.**  SteamVR's hidden-area mesh covers 25 percent of each eye's flat image (corners and the nose side); the lens never shows it, so shading it is wasted
+GPU work.  Estimate from the measurements of section 15: at most 25 percent of the pixel-bound GPU work, about 1 ms at 3840x2160 (where the CPU floor of
+12.6 ms limits the gain to roughly 73 to 79 fps) and about 1.8 ms at 4936x2740 (60 to 68 fps).  **These are estimates; the prototype has not been
+measured.**  Nested lower-density tiles were rejected: they save more on paper but double the main-pass draws again and the frame is CPU-limited.
+
+**Mechanism (`hidden_area.cpp`).**  Before the first main-pass scene draw after each depth clear of the main-sized target (`H_Clear` notes the clear,
+`RunDraw` calls `HiddenAreaBeforeMainDraw` in the plan-1 branch; also once per frame whatever the game does), the hidden area is drawn into the depth buffer only
+(pre-transformed rectangles, depth write on, colour write off, test always) with the depth that fails every later test of the pass.  The game clears to 0 and
+tests with a reversed depth (the projection maps near to 1: `c + d/z`), so the stamp is 1.0 (`stampZ = clearZ < 0.5 ? 1 : 0`, so a game that cleared to 1 would get 0).  Geometry
+shaders then do not run under the stamp (early depth test).  Depth, not stencil: the stamp costs nothing per draw (a stencil test would need render states on every
+draw, and the game's own use of stencil in the scene is unknown), and nothing about the game's draws changes.
+
+**What it must not do.**  An earlier version of this idea (a stamp from the hidden-area mesh) turned the cars black; the likely cause is state left behind by the stamp.
+Now the states it touches (z enable/write/func, colour write mask, alpha test, stencil enable, cull, scissor test, fill mode, depth bias) and the vertex/pixel shader, stream 0,
+declaration/FVF are read first and put back after, with the original setters (so the mod's own tracking of the game's shaders and states stays in step) and
+after `DeviceRestoreAll`.  The mask is built once from the mesh as a 64x64 grid per eye: a cell counts as hidden only if its centre is inside the mesh as given **and**
+inside it turned upside down (the convention for v is not certain and the mesh is not exactly symmetric), then eroded by `HiddenAreaMargin` cells so filters in the
+later passes and the lens's colour fringes never reach into the stamp.  Simulated on the dumped mesh: mesh 25.0 percent, hidden both ways 23.5, stamped 23.5 / 18.1 / 13.2 percent of each
+eye image for margin 0 / 1 (default) / 2.  Rectangles are merged vertically, a few dozen per eye.
+
+**Known risks, to judge in the headset.**  (1) The stamped corners keep the cleared G-buffer; the auto-exposure chain (ps 513-516, downsample of the whole picture)
+and anything that samples near the boundary (ambient occlusion, bloom) sees dark corners: a change of brightness would show in the frame dump compared with the flag off.
+(2) Draws that test no depth (sky, full-screen passes, the lights) are not culled; only the geometry pass gains, so the saving is below the 25 percent of the estimate.
+(3) The depth convention is inferred; the first stamps are logged (`hidden-area cull: stamp #1 ... depth cleared to .. -> stamped .., game z/func ..`).
+
+**How to test.**  `HiddenAreaCull=1` in BlurVR.ini.  On the grid before a race starts (the picture is steady): numpad 8 saves the picture and layers (compare with a run with
+the flag off: cars, brightness, the corners of each eye), numpad 7 prints the GPU phases for a while (`scene-main` and the frame time are what should drop).
+
+**Measured (3840x2160, race, the same stretch of track, probe on, 17 one-second samples with the flag off and 30 with it on, matched by issued draws): no gain.**
+It works as designed: the log shows `stamp #1 ... depth cleared to 0.00 -> stamped 1.0 ... game z 1/1 func 7` (reversed depth, GREATEREQUAL), 3 stamps per frame (the game clears the
+depth of the main target three times a frame), 742 of 4096 cells = 18.1 percent of each eye stamped, 58 rectangles; the frame dump shows black corners with a stepped edge well
+outside the lens view, the cars and the HUD intact (no state leak), no visible brightness change between the two pictures.  Timings (off / on): frame 14.08 / 14.37 ms (71.1 / 69.7 fps); scene-main
+3.28 / 3.14 ms (draw-count matched buckets: 3.22 / 2.83, 3.31 / 3.31, 3.44 / 3.00, about -0.25 ms); `offscreen` 1.49 / 1.86 ms (the stamps' own GPU time lands in the phase that is
+active when they run, about +0.37 ms for three); frame time at equal draw counts 14.06 / 14.13, 14.04 / 14.19, 14.58 / 14.55 ms, i.e. unchanged.  The saving in scene-main is what 18 percent of the
+pixel-bound part predicts, and the stamps cost more than that.
+**Why it cannot help here: the frame is limited by the CPU.**  The CPU parts of the 13.7 ms frame add up to the frame (game and other 6.74, draw hooks 5.53 of which the mod 4.59 = 1.39 us per
+game draw and the driver 0.95, upload wait 0.40, present 0.40, pose wait 0.40, submit 0.18), and the `main-other` phase is 5.85 ms of GPU time for 7 draws whose own busy time is about 0.4 ms (bracketed
+earlier): the GPU spends most of the frame waiting for the CPU to issue the next draw.  Cutting GPU pixel work (this cull, or tiles) does not move the frame at 3840x2160; only CPU time does.
+At 4936x2740 (13.5 MP) the GPU is the limit, but there the same estimate gives about 0.5 ms saved against 0.2-0.6 ms of stamps.  `HiddenAreaCull` therefore stays off; the code stays as an experiment.
+Cheaper variants if it is ever revisited: stamp once per frame (the two later stamps cover far fewer draws), or stamp only the nose side and the outer corners.
+
+## 18. Where the CPU time goes: the detail lines of the probe
+
+The frame at 3840x2160 is limited by the CPU (section 17: the CPU parts add up to the frame; the GPU waits).  The mod's own part is about 4.6 ms of it
+(1.39 us per game draw, 6167 issued draws), and the host harness explains only about 1.2 ms of that as compute, so the rest has to be something the harness cannot
+see: the real cost of device calls, the hooks on the game's other calls, cache effects, the probe itself.  The probe (numpad 7, `[Perf] Enabled=1`) therefore prints five more
+lines every second after the two it always had:
+
+* `perf: draws by plan`: per frame, draws / RunDraw ms / of that the game's own draw call for plan 0 (untouched: shadow maps, post chain, lights), plan 1 (scene draws
+  duplicated per eye), plan 2 (UI) and unclassified.  Says where the per-draw cost lives.
+* `perf: pieces of RunDraw`: classify, eye constants (`ApplyEyeConstants`), eye scissor, shadow-decal/light-volume helpers, `MotionBlurPerEye`, `DrawLightsPerEye`, the
+  `DeviceRestoreAll` at the top.
+* `perf: device calls the mod makes itself`: vertex constants, scissor rect, render state: calls per frame and the time inside the call (this includes any wait the call
+  does when the GPU's queue is full).
+* `perf: the game's other device calls through our hooks`: SetRenderState, SetTexture, SetVSConst, SetPSConst, SetVS, SetPS, SetRenderTarget, SetViewport, SetScissor, Clear:
+  calls per frame, ms in the hook and (in brackets) the part that is the real call; hook minus real call is what our bookkeeping costs.  These are in the "game and other" figure of the first line.
+* `perf: probe cost`: clock reads per frame, the cost of one, and the total: every number above contains it (a scope reads the clock two to four times), subtract it.
+
+Reading it: if "device calls the mod makes itself" is most of the mod's time the lever is fewer calls (or calls that wait less); if plan 1's non-driver time dominates it is the compute
+per duplicated draw (candidates: decompose the projection only when the view-projection block changes, cache the main-pass / half-pass / shape tests per render target change);
+if the hooks' own time is large the lever is slimmer bookkeeping in them.
+
+**Measured (3840x2160, race, 43 one-second blocks, probe on; medians): the UI draws are 3.35 ms of the mod's 5.4 ms.**  Frame 15.22 ms (65.7 fps, the probe's own clock reads cost
+0.84 ms of it); draw hooks 6.30 ms = driver 0.92 + mod 5.42.  By plan (draws per frame, RunDraw ms, of which the game's own draw call): plan 0 untouched 1011, 1.17 (driver 0.33);
+plan 1 scene 2046, 1.82 (0.59); **plan 2 UI 43, 3.35 (0.03)**: about 78 us per UI draw against 0.63 us per duplicated scene draw.  Pieces of the scene path: classify 0.19, eye constants
+0.69 (4100 calls), eye scissor 0.15; the mod's own device calls total 0.42 ms (4600 vertex-constant writes at 74 ns, 1900 scissor writes at 47 ns); the game's other calls through our hooks
+1.64 ms in total of which the real calls 1.10, i.e. our bookkeeping in them is 0.5 ms or less including the probe's own clock reads.  So the per-eye machinery that sections 14 optimised is no longer the problem.
+**The cause in the UI path is the occlusion query of `HudDrawCoversScreen`**: in a race every UI draw whose first texture is 32x32 or smaller (the UI's 16x16 fill texture, used by bars and frames) is a
+"candidate" for being a dim/fill piece, so it is drawn once into a scratch target with an occlusion query and the CPU spins on `GetData(FLUSH)` for the result, a round trip to the GPU of
+about a quarter of a millisecond each (no query timed out in the log).  A dozen of those a frame is the 3 ms.
+**The cut (`[Hud] CoverageEvery`, default 8; 1 = the old behaviour).**  `CoverageOfCandidate` (draw_dispatch.cpp) keeps the last measured coverage per candidate (by its position in the
+frame, its shaders and its first texture) and reuses it for up to 8 frames; the refresh is staggered by position, so no frame pays for all of them.  The decision is `coverage >= threshold`
+with the current threshold, as before.  The cost: a fill that appears suddenly (results screen, pause dim) is noticed up to 8 frames (90 ms) late, and a fill that disappears is dropped for as
+long.  The probe now also times the query (`UI coverage query`) and the UI draw into the layer (`UI draw into the layer`), which overlap, to show what is left of the 3.35 ms.
+Candidates after that, from the same profile: the layer switches in `DrawHudToTexture` (two render-target and two depth-stencil switches per UI draw; they could be kept across consecutive UI
+draws with the lazy-state scheme of `device_state.cpp`), the per-eye constant writes (0.7 ms, two calls per scene draw, hard to avoid without recording draws), and the probe's own cost.
+
+**First result of CoverageEvery=8 (race, probe on, 43 blocks): small.**  UI draws 2.62 ms (was 3.35), frame 14.70 ms / 68.0 fps (was 15.22 / 65.7), draw hooks 5.5 ms; the new `UI coverage query` piece
+shows **1 query per frame costing 2.46 ms** (range 2.0 to 2.9), and the UI draw into the layer itself only 41 calls = 0.10 ms.  So the cost is not per query but per *wait*: the first blocking
+`GetData(FLUSH)` of a frame has to wait until the GPU has drained what is queued before it (about 2.5 ms in this CPU-limited frame), later ones in the same frame are cheap.  Spreading the same
+queries over frames (1 a frame) keeps the wait in every frame, and the old 3.35 ms was one such wait plus about 40 cheap UI draws.  Hence: **no waiting at all in a steady race frame.**
+Second version: each candidate position has its own occlusion query slot (`CoverageSlot`, hud.cpp); every `CoverageEvery` frames the draw runs into the scratch target with its slot's
+query and nothing waits; the result is read with `GetData(..., 0)` on a later frame (`HudCoveragePoll`) and kept per position with the signature of the draw it belongs to (shaders, first texture;
+a result for a draw that is no longer at that position is dropped); every frame uses the last result.  A position with no result yet is measured with the wait only when it matters (`needNow`: the
+race-start window, menus, the first HUD draws of a frame) or the very first time, otherwise it counts as not covering until its result arrives.  Expected: about 2.4 ms less CPU per frame.
+
+**Result of the asynchronous coverage (race, probe on, 58 blocks, medians), three runs side by side.**
+
+| | every draw waits | CoverageEvery=8, waiting | asynchronous |
+|---|---|---|---|
+| frame / fps | 15.22 ms / 65.7 | 14.70 ms / 68.0 | **13.63 ms / 73.4** (62.9 to 82.2) |
+| UI draws (plan 2) | 3.35 ms | 2.62 ms | **0.12 ms** |
+| mod's time in the draw hooks | 5.42 ms | 4.61 ms | **1.92 ms** (0.73 us per game draw) |
+| plan 1 / plan 0 | 1.82 / 1.17 ms | 1.87 / 0.97 | 1.52 / 1.06 |
+| end-of-frame wait for the GPU (`upload`) | 0.4 ms | 0.47 | **2.63 ms** |
+| game and other | 7.5 ms | 7.6 | 7.2 |
+
+The CPU part of the mod fell by 3.5 ms but the frame only by 1.6: the CPU now finishes the frame about 2.6 ms before the GPU and waits for the shared-texture fence (the `upload` line), so **the frame is now
+limited by the GPU, about 13.6 ms**.  GPU phases (wall time, medians): offscreen 2.27, scene-main 2.59, scene-half 0.39, lights 0.28, **main-other 6.05**, post-low 0.76, hud 0.25, copy 0.73.  `main-other` is 7 draws whose
+own GPU time is 0.39 ms; the other 5.4 ms is time the phase spends between them.  It was 5.1 ms at 2160x1071 and is 5.8 to 6.0 ms at 3840x2160: it does not depend on the resolution, and it stays with the CPU no longer the
+bottleneck, so it is not the CPU's gap and not pixel work.  Suspect: the game's draws into the back buffer (the shader-less blits at the end of `main-other`, 4.4 a frame) wait for the previous frame's `Present`: a windowed
+Present copies the back buffer into the desktop compositor's surface, and the first write to the back buffer of the next frame waits for that copy and the compositor's schedule.  Two things to find out, both in this build:
+(1) the probe now prints, for every bracketed `main-other` draw, the interval after it (`the interval after it x ms`), which shows which draw is followed by the wait; (2) `[Render] DesktopPresentEvery=N` makes the real
+Present of a race frame happen only every N frames (the others return success without calling it; the VR picture is submitted before it either way), the window on the desktop then updates less often.  If the hypothesis is right,
+N=4 should make `main-other` fall by several ms.
+
+**DesktopPresentEvery 1 against 4 (race lap, probe on, 59 and 60 blocks, medians; different laps, so about plus or minus 1 ms of the frame is noise).**  Frame 14.60 -> 13.77 ms (68.5 -> 72.7 fps, range 60-78 -> 62-84);
+`present` on the CPU 0.42 -> 0.12 ms; the end-of-frame wait for the GPU (`upload`) 2.65 -> 2.51 ms; hooks, game and other unchanged (3.1 / 7.7 -> 3.0 / 7.5).  The GPU phase lines of the N=4 run
+(total 8.2 ms, `main-other` 0.51 instead of 6.18) must **not** be believed: the probe measured only 17-19 GPU frames a second against 66-72 frames, because a frame whose timestamp queries are not back is dropped
+silently (`ReadFrames` leaves the frame out without counting it) and with three of four Presents skipped the command buffer is flushed less often, so only some frames (probably the ones ending in a real
+Present) were complete.  In the N=1 run the `main-other` detail shows the 4.3 shader-less draws per frame followed by an interval of 6.1 ms, and the 0.33 ms colour pass: the wait sits behind the
+shader-less blits, which is where the game writes the back buffer.  What the two runs do show: skipping Present is worth about 0.3 ms of CPU and at most about 0.8 ms of frame, far less than the 5.4 ms that
+`main-other` seemed to hold; so either the wait is not (only) the Present or the GPU is not what limits the frame.  Next tests (no code): N=1000 (never present after the first frame) on the grid with the countdown
+(a still picture: the same scene for both settings), and the same at 2160x1200 to see where the frame sits when pixels do not matter.  Another way to see if the GPU limits: SteamVR's frame timing graph (GPU ms).
+
+**Status at the end of this round (3840x2160, SharedTransport=1, CoverageEvery=8, DesktopPresentEvery=4; probe-on numbers, laps differ by about 1 ms).**
+Frame 17.2 ms at the start of the performance work (2160x1071, 58 fps, copy through the CPU) -> 15.2 (per-draw trims, lazy device state) -> 12.6 at 2160x1071 and 13.7 at 3840x2160 (shared texture) ->
+**about 13.6 to 13.8 ms (72-73 fps) after the UI coverage query stopped waiting**; the probe itself costs about 0.7 ms of that, so the real figure is a little better (not measured).  The mod's own CPU time
+in the draw hooks went 5.4 -> 1.9 ms (0.73 us per game draw); the frame is now limited by the GPU: the CPU finishes about 2.5 ms before it and waits on the shared-texture fence.  Where the GPU time sits
+(wall time, medians): shadow maps and other off-screen 2.3, scene 2.6-3.1, `main-other` 6.0 of which only 0.4 is draws (the rest is an unexplained wait that sits behind the shader-less blits into the back
+buffer and does not depend on the resolution), lights/glow/post about 1.5, copy 0.7.  Tried and dropped: hidden-area depth cull (section 17, no gain), skipping desktop Presents (small gain, kept as an option, section 18).
+Open questions / next ideas, in the order I would try them: (1) what the 5.4 ms behind the shader-less blits is (never-present test, SteamVR's GPU frame timing, the game's anti-aliasing setting, bracketing the non-draw calls
+`StretchRect`/`Clear`/`SetRenderTarget` with GPU stamps); (2) the probe drops frames whose timestamp queries are not back without saying so (`ReadFrames`): count them before trusting a GPU line when
+Presents are skipped; (3) keep the layer render target bound across consecutive UI draws (small now: the UI draws cost 0.12 ms); (4) the per-eye constant writes (0.7 ms) need a recorded command stream to avoid.
+
+## 19. Release 1.1: the diagnostics that stay, the ones that were removed
+
+**Stay** (all off by default; nothing runs until asked): logging (`[General] Log=1`; `Log` is 0 by default and the release ini has no log option; what is logged is start-up, device and VR set-up,
+mode changes and errors, nothing per frame), the timing probe (`[Perf] Enabled=1` or Num7: the frame / CPU / GPU-phase lines of section 13), the frame dump (Num8, at most 12 sets a run), the headset report
+line (`[Foveation] Report`, only runs with the log on).
+
+**Removed** (they were investigation tools): the draw capture (Num0) and the flow / cap / ui-glow / intro-frame / post-pass-shader logs of `RunDraw`; the HUD layer statistics (`DiagLayerStats`, which also
+did a read-back from the GPU every 250-700 ms in the menus); the menu-frame sampling and once-a-second menu log of `VrSubmitFrame`, the menu-placement log and the heartbeat line; the watchdog thread
+(one log line a second for five minutes); the logging of window calls in `window_spoof.cpp` (only `GetClientRect` and the window creation / procedure hooks remain); the timed dump (`AutoDumpSeconds`); the detail lines
+of section 18 (per plan, per piece of `RunDraw`, per hook, the mod's own device calls, the probe's own cost) and the per-frame gap lines of `main-other`.  The hidden-area cull of section 17 is in `experiments/hidden_area/`.
+`experiments/diagnostics-removed-in-1.1.patch` is the whole cleanup as a diff (`git apply -R` on the tree it was made from brings the diagnostics back); sections 16 to 18 above describe how they were used.
+
+**Release.**  Version string `BLURVR_VERSION` in core.h (1.1), also in the log's first line.  `release/BlurVR.ini` is the small ini that goes into the zip (resolution, start size, shared transport);
+every other option is documented in README.txt.  `tools/make_release.py` builds `dist/BlurVR-1.1.zip` from the tree (d3d9.dll, openvr_api.dll, the release ini, README.txt, install/uninstall, the OpenVR
+licence; no source code: it is in the repository, and `tools/check_release_zip.py` fails on any source file in the zip).  Checks run for the cleanup: the host harness (`tools/hotpath_check.py`) gives the same hashes in all eight
+configurations as before it (the draw commands are unchanged), the DLL builds without warnings that matter, and a start, a menu and a race lap were not repeated after the cleanup (the next headset test of the
+release build is the check that matters).
+
+## 20. The window on the desktop: one eye instead of the side-by-side picture (`[Render] DesktopView`, default 1)
+
+The game's window shows the back buffer, which in a race is the side-by-side picture, stretched to whatever shape the window has (and the window is often clamped to the desktop, section 16): two squashed
+eyes.  `VrShowEyeOnDesktop` (vr_runtime.cpp), called from `H_Present` just before the real Present of a race frame that is really going to be presented (not on the frames `DesktopPresentEvery` skips), paints one
+eye's view over the back buffer with a single `StretchRect`, after the headset has its copy: `VrSubmitFrame` copied the finished picture (HUD layers included) into the shared texture, or into the staging surface
+when SharedTransport is off, and waited for it, and it remembers that copy as `g_vr.desktopSource`.  The blit reads that copy, not the back buffer (a surface cannot be both source and destination), so the headset's
+picture, the frame dump and the frame timing are not touched; the game does not use the old back buffer (the swap effect discards it) and draws the next frame over it.
+The crop: the eye picture is flat, so the window shows a rectangle of tangent space around the view straight ahead (`-left/(right-left)` of the width, `up/(up+down)` of the height), as large as fits inside the
+eye picture, with the window's aspect ratio (the real client size of the focus window, read with this module's own `GetClientRect`, not the spoofed one of section 16).  Written into the whole back buffer (see below for the window-sized version); Present then
+stretches the back buffer to the window, and the two stretches cancel, so nothing looks squashed.  For a 16:9 window and the Index's tangents this is about 93 by 61 degrees around straight ahead (half width = the nearest side of the tangent box, 1.047, the nose side of the left eye).
+Cost: one blit of the whole back buffer (about 0.1 to 0.2 ms of GPU time at 3840x2160) on each presented frame.  Not applied when the back buffer is multisampled or when the window is minimised.  Menus and loading
+screens (the floating-screen path) are always presented whole.  Not measured in the headset yet.
+
+**At the window's own size.**  Painting and presenting the whole 3840x2160 back buffer for a window of 1920x1080 (or 3854x1071) is more work than the mirror needs: a 4K blit, then a Present that reads 8 million pixels and
+stretches them down.  The probe had shown a real Present to be worth about 1 ms of frame time (skipping three of four gave 0.8 ms).  Now `VrShowEyeOnDesktop` writes the crop at the window's real client size (at most
+the back buffer: scaled down by the same factor in both directions otherwise) into the **top-left corner** of the back buffer and returns that rectangle; `H_Present` hands it to the real Present as its source rectangle, so
+the runtime and the desktop compositor handle only those pixels, 1:1.  A Present source rectangle is only guaranteed with the COPY swap effect, so `AdjustPresentParams` (CreateDevice and every Reset) turns a
+windowed, non-multisampled request into COPY with one back buffer (`swap effect 1 with 0 back buffers -> copy with one` in the log; `CreateDevice request:` now also shows the game's swap effect, multisample type and
+back buffer count) and sets `g_desktopRectUsable`.  If the driver still refuses the rectangle (`Present with a source rectangle failed ...`, once), `g_desktopRectFailed` turns the feature back to painting and presenting the
+whole back buffer.  Menus and everything that is not a race frame present the whole back buffer with no rectangle.  Checked with `tools/ex_proxy_check.cpp` (an Ex device through the proxy: creation with COPY, Present with a source
+rectangle, Reset); this runtime also accepts the rectangle with DISCARD.  The cost for the headset: the blit and the copy are queued after the headset's copy and the fence, so the CPU never waits for them and the
+compositor does not depend on them; the GPU does them before the next frame, now about a quarter of the pixels they were (a 1920x1080 window: 2 million instead of 8.3 million), and with `DesktopPresentEvery=4` on one frame in four.
+Not measured in the headset yet: compare the frame time with `DesktopView=0` (old whole-picture present) and `DesktopView=1`.
+
+## 21. The window fits the monitor (`[Render] FitDesktopWindow`, default 1)
+
+At a 3840x2160 video mode the game asks for a window with a client area of that size; Windows lets it be as large as the whole virtual desktop (two 1080p monitors gave 3860x1100 in the proxy check), so the mirror
+spilled over both monitors.  The window is only a mirror, and `VrShowEyeOnDesktop` (section 20) already crops one eye to the window's real client aspect and presents at the window's own size, so the fix is only to keep
+the window itself small; no change to what the game renders.  Three places in `window_spoof.cpp`:
+- `FitNewWindow` in `H_CreateWindowExA/W`: a top-level window with a caption whose requested size is bigger than the primary monitor's work area is created at the work area's size and corner.  Log: `the game's window
+  (WxH requested) is made ...`.
+- `GameProcHook`, `WM_WINDOWPOSCHANGING` (the wrapped window procedure sees every size change of the window, including the game's own `SetWindowPos` calls): `cx`/`cy` are cut to the work area of the monitor the window is on, unless the call has `SWP_NOSIZE`.  The game is not told, so its own idea of the window size
+  (the spoofed `GetClientRect`/`WM_SIZE` of section 16) stays the intended one.
+- Only while the game is windowed: `g_deviceWindowed` is the `Windowed` flag of the last `CreateDevice`/`Reset` (`WindowSpoofWindowed`, called from `LogCreateDeviceRequest` and `H_Reset`), and before the first device the
+  `windowed` attribute of the saved video mode (`ReadSavedVideoSize`, third parameter).  A full-screen mode is never touched.
+Checked with `tools/ex_proxy_check.cpp ... big` (a 5000x3000 `CreateWindow` and a 6000x4000 `SetWindowPos`): 1920x1032 (the work area) with the option on, 3860x1100 (Windows' own limit) with `FitDesktopWindow=0`;
+an 800x600 window is left alone.  Not yet seen in the game.
+
+## 22. GitHub: history, build and release
+
+The repository on GitHub (https://github.com/TwoAyEm/BlurVR, branch `main`) starts as one squashed commit of the 1.1 tree; the development history before it is in the local branch `history` only (never pushed).
+`.github/workflows/build.yml` runs on `windows-latest` for every push to `main`, every pull request and by hand: Python 3.12, `pip install ziglang==0.16.0` (the Zig version the DLL was built and tested with), `source\build.bat nodeploy`,
+`tools/make_release.py`, `tools/check_release_zip.py` (the zip has the DLL, openvr_api.dll, the small ini, the README and the install scripts, no source; with a tag, the tag must be `v` + `BLURVR_VERSION`), and uploads
+`BlurVR-<version>.zip` as the workflow artifact `BlurVR-zip`.  A push of a tag `v<version>` also creates the GitHub release with the zip attached (`gh release create` with the workflow's own token, no other secrets).
+To release: bump `BLURVR_VERSION` in `src/core.h`, commit, `git tag v<version>`, `git push origin main v<version>`.  The Zig compiler's version matters for the DLL bytes only, not for behaviour as far as tested; change the pin
+deliberately.

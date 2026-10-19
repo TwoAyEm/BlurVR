@@ -1,0 +1,1677 @@
+diff --git a/source/src/config.cpp b/source/src/config.cpp
+index 7dbda63..9ab8d54 100644
+--- a/source/src/config.cpp
++++ b/source/src/config.cpp
+@@ -22,7 +22,7 @@ static double ReadIniDouble(const char* section, const char* key, double default
+ void LoadConfig()
+ {
+     g_cfg.enabled = ReadIniInt("General", "Enabled", 1);
+-    g_cfg.log = ReadIniInt("General", "Log", 1);
++    g_cfg.log = ReadIniInt("General", "Log", 0);
+     g_cfg.recenterKey = ReadIniInt("General", "RecenterKey", 0x78);
+     g_cfg.headTrackingKey = ReadIniInt("General", "ToggleKey", 0x79);
+     g_cfg.modeKey = ReadIniInt("General", "ModeKey", 0x77);
+@@ -76,7 +76,6 @@ void LoadConfig()
+     g_cfg.perfEnabled = ReadIniInt("Perf", "Enabled", 0);
+     g_cfg.keyPerf = ReadIniInt("Debug", "KeyPerf", 0x67);
+     g_cfg.keyDump = ReadIniInt("Debug", "KeyDump", 0x68);
+-    g_cfg.autoDumpSeconds = ReadIniInt("Debug", "AutoDumpSeconds", 0);
+     g_cfg.startAtSavedSize = ReadIniInt("Render", "StartAtSavedSize", 1);
+     g_cfg.coverageEvery = ReadIniInt("Hud", "CoverageEvery", 8);
+     g_cfg.desktopPresentEvery = ReadIniInt("Render", "DesktopPresentEvery", 1);
+diff --git a/source/src/config.h b/source/src/config.h
+index 9933ccd..19e41d4 100644
+--- a/source/src/config.h
++++ b/source/src/config.h
+@@ -3,7 +3,7 @@
+ #include "common.h"
+ 
+ struct Config {
+-    int enabled = 1, log = 1;
++    int enabled = 1, log = 0; // log: BlurVR.log is only written with Log=1 under [General]
+     int recenterKey = 0x78;     // F9
+     int headTrackingKey = 0x79; // F10
+     int modeKey = 0x77;         // F8: auto -> force menu -> force race
+@@ -57,7 +57,6 @@ struct Config {
+     int perfEnabled = 0;  // [Perf] Enabled: log GPU and CPU frame timing once a second (perf_probe.cpp); the key below flips it live
+     int keyPerf = 0x67;   // numpad 7
+     int keyDump = 0x68;   // [Debug] KeyDump, numpad 8: save the picture sent to the headset and the UI layers as .bmp files (frame_dump.cpp)
+-    int autoDumpSeconds = 0; // [Debug] AutoDumpSeconds: also save the picture this many seconds after the back buffer changed size (0 = never)
+     int sharedTransport = 0; // [Render] SharedTransport: 1 = run the game on a Direct3D 9Ex device and hand the finished frame to SteamVR as a shared texture (no read back through the CPU)
+     int startAtSavedSize = 1; // [Render] StartAtSavedSize: a windowed start that Windows clamped to the desktop gets the game's saved video mode as its back buffer (display_modes.cpp)
+     int startWidth = 0, startHeight = 0; // [Render] StartWidth/StartHeight: the size a windowed start should have (0 = the video mode in the game's settings.xml)
+diff --git a/source/src/core.h b/source/src/core.h
+index 3be7189..0b2dab0 100644
+--- a/source/src/core.h
++++ b/source/src/core.h
+@@ -2,6 +2,9 @@
+ #pragma once
+ #include "common.h"
+ 
++// Version of the mod, shown in the log.
++#define BLURVR_VERSION "1.1"
++
+ // Handle of this DLL (d3d9.dll proxy).
+ extern HMODULE g_selfModule;
+ // Folder of the game executable (where the proxy lives).
+diff --git a/source/src/device_hooks.cpp b/source/src/device_hooks.cpp
+index 996b350..be1d8ab 100644
+--- a/source/src/device_hooks.cpp
++++ b/source/src/device_hooks.cpp
+@@ -19,12 +19,8 @@
+ #include "streaks.h"
+ #include "vr_runtime.h"
+ 
+-static volatile unsigned g_presentCalls = 0;
+-static volatile unsigned long long g_lastPresentTick = 0;
+ static HRESULT STDMETHODCALLTYPE H_Present(IDirect3DDevice9* d, const RECT* a, const RECT* b, HWND w, const RGNDATA* r)
+ {
+-    g_presentCalls++;
+-    g_lastPresentTick = GetTickCount64();
+     if (g_vrStartDeferred) {
+         if (g_preVrSceneDraws >= 20)
+             g_preVrSceneFrames++;
+@@ -44,8 +40,8 @@ static HRESULT STDMETHODCALLTYPE H_Present(IDirect3DDevice9* d, const RECT* a, c
+     if (g_vr.active)
+         VrSubmitFrame(d);
+     PerfFrameClose(d, raceFrame);
+-    // The picture the player sees goes to the headset; the window on the desktop is only a mirror.  Its Present is a copy of the whole
+-    // back buffer into the desktop compositor's surface, and the next frame's first write to the back buffer has to wait for it.
++    // The picture the player sees goes to the headset; the window on the desktop is only a mirror.  Its Present is a copy of the
++    // whole back buffer into the desktop compositor's surface: DesktopPresentEvery presents it only every n-th race frame.
+     bool skipPresent = false;
+     if (g_cfg.enabled && g_cfg.desktopPresentEvery > 1 && raceFrame) {
+         static unsigned presentCounter = 0;
+@@ -183,15 +179,11 @@ static HRESULT STDMETHODCALLTYPE H_CreateIndexBuffer(IDirect3DDevice9* d, UINT l
+ 
+ static HRESULT STDMETHODCALLTYPE H_SetRenderTarget(IDirect3DDevice9* d, DWORD idx, IDirect3DSurface9* s)
+ {
+-    PerfHookScope perfHook(PHK_SET_RT);
+     DeviceRestoreAll(d); // (the device resets the scissor rectangle with a new target; both sides then agree again)
+     if (idx == 0 && g_streakUsed && s != g_renderTarget0)
+         FlushStreakLayer(d);
+-    HRESULT hr;
+-    {
+-        PerfHookScope::Inner inner(perfHook);
+-        hr = ORIG(HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9*, DWORD, IDirect3DSurface9*), VT_SetRenderTarget)(d, idx, s);
+-    }
++    HRESULT hr =
++        ORIG(HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9*, DWORD, IDirect3DSurface9*), VT_SetRenderTarget)(d, idx, s);
+     if (SUCCEEDED(hr) && idx == 0) {
+         g_renderTarget0 = s;
+         if (s) {
+@@ -229,13 +221,8 @@ static HRESULT STDMETHODCALLTYPE H_SetDepthStencilSurface(IDirect3DDevice9* d, I
+ static HRESULT STDMETHODCALLTYPE H_Clear(IDirect3DDevice9* d, DWORD count, const D3DRECT* rects, DWORD flags, D3DCOLOR color,
+                                          float z, DWORD stencil)
+ {
+-    PerfHookScope perfHook(PHK_CLEAR);
+     DeviceRestoreAll(d);
+-    HRESULT hr;
+-    {
+-        PerfHookScope::Inner inner(perfHook);
+-        hr = ORIG(PFN_Clear, VT_Clear)(d, count, rects, flags, color, z, stencil);
+-    }
++    HRESULT hr = ORIG(PFN_Clear, VT_Clear)(d, count, rects, flags, color, z, stencil);
+     if ((flags & D3DCLEAR_STENCIL) && g_vr.active)
+         OnGameStencilClear(d, stencil);
+     return hr;
+@@ -243,12 +230,7 @@ static HRESULT STDMETHODCALLTYPE H_Clear(IDirect3DDevice9* d, DWORD count, const
+ 
+ static HRESULT STDMETHODCALLTYPE H_SetViewport(IDirect3DDevice9* d, const D3DVIEWPORT9* vp)
+ {
+-    PerfHookScope perfHook(PHK_SET_VIEWPORT);
+-    HRESULT hr;
+-    {
+-        PerfHookScope::Inner inner(perfHook);
+-        hr = ORIG(PFN_SetViewport, VT_SetViewport)(d, vp);
+-    }
++    HRESULT hr = ORIG(PFN_SetViewport, VT_SetViewport)(d, vp);
+     if (SUCCEEDED(hr) && vp)
+         g_gameViewport = *vp;
+     return hr;
+@@ -256,22 +238,15 @@ static HRESULT STDMETHODCALLTYPE H_SetViewport(IDirect3DDevice9* d, const D3DVIE
+ 
+ static HRESULT STDMETHODCALLTYPE H_SetRenderState(IDirect3DDevice9* d, D3DRENDERSTATETYPE st, DWORD v)
+ {
+-    PerfHookScope perfHook(PHK_SET_RENDER_STATE);
+     if (st == D3DRS_SCISSORTESTENABLE) {
+         g_gameScissorEnabled = v ? TRUE : FALSE;
+         DeviceNoteGameScissorEnable(v != 0);
+     }
+-    PerfHookScope::Inner inner(perfHook);
+     return ORIG(PFN_SetRenderState, VT_SetRenderState)(d, st, v);
+ }
+ static HRESULT STDMETHODCALLTYPE H_SetScissorRect(IDirect3DDevice9* d, const RECT* r)
+ {
+-    PerfHookScope perfHook(PHK_SET_SCISSOR);
+-    HRESULT hr;
+-    {
+-        PerfHookScope::Inner inner(perfHook);
+-        hr = ORIG(PFN_SetScissorRect, VT_SetScissorRect)(d, r);
+-    }
++    HRESULT hr = ORIG(PFN_SetScissorRect, VT_SetScissorRect)(d, r);
+     if (SUCCEEDED(hr) && r) {
+         g_gameScissorRect = *r;
+         DeviceNoteGameScissorRect(*r);
+@@ -281,10 +256,8 @@ static HRESULT STDMETHODCALLTYPE H_SetScissorRect(IDirect3DDevice9* d, const REC
+ 
+ static HRESULT STDMETHODCALLTYPE H_SetTexture(IDirect3DDevice9* d, DWORD stage, IDirect3DBaseTexture9* t)
+ {
+-    PerfHookScope perfHook(PHK_SET_TEXTURE);
+     if (stage < 16)
+         g_boundTextures[stage] = t;
+-    PerfHookScope::Inner inner(perfHook);
+     return ORIG(HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9*, DWORD, IDirect3DBaseTexture9*), VT_SetTexture)(d, stage,
+                                                                                                               t);
+ }
+@@ -325,12 +298,8 @@ static HRESULT STDMETHODCALLTYPE H_CreateVertexShader(IDirect3DDevice9* d, const
+ 
+ static HRESULT STDMETHODCALLTYPE H_SetVertexShader(IDirect3DDevice9* d, IDirect3DVertexShader9* s)
+ {
+-    PerfHookScope perfHook(PHK_SET_VS);
+-    HRESULT hr;
+-    {
+-        PerfHookScope::Inner inner(perfHook);
+-        hr = ORIG(HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9*, IDirect3DVertexShader9*), VT_SetVertexShader)(d, s);
+-    }
++    HRESULT hr =
++        ORIG(HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9*, IDirect3DVertexShader9*), VT_SetVertexShader)(d, s);
+     if (SUCCEEDED(hr)) {
+         unsigned slot = ShaderCacheSlot(s);
+         if (s && g_vsCache.handle[slot] == s)
+@@ -351,7 +320,6 @@ static HRESULT STDMETHODCALLTYPE H_SetVertexShader(IDirect3DDevice9* d, IDirect3
+ static HRESULT STDMETHODCALLTYPE H_SetVertexShaderConstantF(IDirect3DDevice9* d, UINT start, const float* data,
+                                                             UINT count)
+ {
+-    PerfHookScope perfHook(PHK_SET_VS_CONST);
+     if (data && start < 256) {
+         UINT n = count;
+         if (start + n > 256)
+@@ -359,7 +327,6 @@ static HRESULT STDMETHODCALLTYPE H_SetVertexShaderConstantF(IDirect3DDevice9* d,
+         memcpy(&g_vsConstants[start * 4], data, n * 4 * sizeof(float));
+     }
+     DeviceNoteGameVsConstants(start, count);
+-    PerfHookScope::Inner inner(perfHook);
+     return ORIG(PFN_SetShaderConstantF, VT_SetVertexShaderConstantF)(d, start, data, count);
+ }
+ 
+@@ -382,12 +349,7 @@ static HRESULT STDMETHODCALLTYPE H_CreatePixelShader(IDirect3DDevice9* d, const
+ 
+ static HRESULT STDMETHODCALLTYPE H_SetPixelShader(IDirect3DDevice9* d, IDirect3DPixelShader9* s)
+ {
+-    PerfHookScope perfHook(PHK_SET_PS);
+-    HRESULT hr;
+-    {
+-        PerfHookScope::Inner inner(perfHook);
+-        hr = ORIG(HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9*, IDirect3DPixelShader9*), VT_SetPixelShader)(d, s);
+-    }
++    HRESULT hr = ORIG(HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9*, IDirect3DPixelShader9*), VT_SetPixelShader)(d, s);
+     if (SUCCEEDED(hr)) {
+         unsigned slot = ShaderCacheSlot(s);
+         if (s && g_psCache.handle[slot] == s)
+@@ -407,14 +369,12 @@ static HRESULT STDMETHODCALLTYPE H_SetPixelShader(IDirect3DDevice9* d, IDirect3D
+ static HRESULT STDMETHODCALLTYPE H_SetPixelShaderConstantF(IDirect3DDevice9* d, UINT start, const float* data,
+                                                            UINT count)
+ {
+-    PerfHookScope perfHook(PHK_SET_PS_CONST);
+     if (data && start < 256) {
+         UINT n = count;
+         if (start + n > 256)
+             n = 256 - start;
+         memcpy(&g_psConstants[start * 4], data, n * 4 * sizeof(float));
+     }
+-    PerfHookScope::Inner inner(perfHook);
+     return ORIG(PFN_SetShaderConstantF, VT_SetPixelShaderConstantF)(d, start, data, count);
+ }
+ 
+@@ -459,34 +419,12 @@ static HRESULT STDMETHODCALLTYPE H_DrawIndexedPrimitiveUP(IDirect3DDevice9* d, D
+ }
+ 
+ static bool g_deviceHooked = false;
+-static void** g_hookedVtable = NULL;
+-static IDirect3DDevice9* g_hookedDevice = NULL;
+-
+-// Diagnostic: once a second for the first five minutes, report whether the Present hook is still being called and whether
+-// the device's vtable entries are still ours (a log that goes quiet after the start screen needs explaining).
+-static DWORD WINAPI WatchdogThread(LPVOID)
+-{
+-    for (int i = 0; i < 300; i++) {
+-        Sleep(1000);
+-        void** vt = g_hookedDevice ? *(void***)g_hookedDevice : NULL;
+-        Log("watchdog: present calls %u (last %llu ms ago), frame %llu, vtable %s, Present %s, DrawPrimitiveUP %s, level %s, "
+-            "loading %d, vr active %d",
+-            g_presentCalls, g_lastPresentTick ? GetTickCount64() - g_lastPresentTick : 0ull, g_vr.frameCount,
+-            vt == g_hookedVtable ? "same" : "CHANGED", vt && vt[VT_Present] == (void*)H_Present ? "ours" : "NOT ours",
+-            vt && vt[VT_DrawPrimitiveUP] == (void*)H_DrawPrimitiveUP ? "ours" : "NOT ours", g_currentLevel,
+-            (int)g_levelLoading, (int)g_vr.active);
+-    }
+-    return 0;
+-}
+ 
+ void HookDevice(IDirect3DDevice9* dev)
+ {
+     void** vt = *(void***)dev;
+     if (g_deviceHooked)
+         return;
+-    g_hookedVtable = vt;
+-    g_hookedDevice = dev;
+-    CreateThread(NULL, 0, WatchdogThread, NULL, 0, NULL);
+ #define HK(idx, fn) PatchVtable(vt, idx, (void*)fn, &g_deviceOriginals[idx])
+     HK(VT_Present, H_Present);
+     HK(VT_Reset, H_Reset);
+diff --git a/source/src/device_state.cpp b/source/src/device_state.cpp
+index 997f121..b1c4a36 100644
+--- a/source/src/device_state.cpp
++++ b/source/src/device_state.cpp
+@@ -1,7 +1,6 @@
+ // Lazy restore of the state the per-eye draws change.  See device_state.h.
+ #include "device_state.h"
+ #include "d3d_hooks.h"
+-#include "perf_probe.h"
+ #include "render_state.h"
+ #include "shader_tracking.h"
+ #include <algorithm>
+@@ -99,10 +98,7 @@ static void RestoreRegisters(IDirect3DDevice9* device, const Mask256 restore)
+             if (memcmp(&g_override[reg * 4], &g_vsConstants[reg * 4], 16) != 0)
+                 differ[word] |= 1ull << (reg & 63);
+         }
+-    ForEachRun(differ, [&](UINT a, UINT b) {
+-        PerfModCallScope timed(PMC_VS_CONST);
+-        setConstants(device, a, &g_vsConstants[a * 4], b - a);
+-    });
++    ForEachRun(differ, [&](UINT a, UINT b) { setConstants(device, a, &g_vsConstants[a * 4], b - a); });
+     for (UINT word = 0; word < 4; word++)
+         g_overridden[word] &= ~restore[word];
+ }
+@@ -140,10 +136,7 @@ void DeviceSetVsOverrides(IDirect3DDevice9* device, const VsWrite* writes, int c
+         if (first == w.count)
+             continue;
+         UINT reg = w.reg + first, n = last - first + 1;
+-        {
+-            PerfModCallScope timed(PMC_VS_CONST);
+-            setConstants(device, reg, &w.data[first * 4], n);
+-        }
++        setConstants(device, reg, &w.data[first * 4], n);
+         memcpy(&g_override[reg * 4], &w.data[first * 4], n * 16);
+         SetBits(g_overridden, reg, reg + n);
+     }
+@@ -164,10 +157,8 @@ void DeviceSetScissorEnabled(IDirect3DDevice9* device, bool enabled)
+ {
+     bool game = g_gameScissorEnabled != FALSE;
+     bool held = game != g_enableOverridden; // overridden means the device holds the opposite of the game's value
+-    if (g_scissorUnknown || held != enabled) {
+-        PerfModCallScope timed(PMC_RENDER_STATE);
++    if (g_scissorUnknown || held != enabled)
+         ((PFN_SetRenderState)g_deviceOriginals[VT_SetRenderState])(device, D3DRS_SCISSORTESTENABLE, enabled ? TRUE : FALSE);
+-    }
+     g_enableOverridden = enabled != game;
+ }
+ 
+@@ -175,10 +166,8 @@ void DeviceSetEyeScissor(IDirect3DDevice9* device, const RECT& rect)
+ {
+     DeviceSetScissorEnabled(device, true);
+     const RECT& held = g_rectOverridden ? g_overrideRect : g_gameScissorRect;
+-    if (g_scissorUnknown || memcmp(&held, &rect, sizeof(RECT)) != 0) {
+-        PerfModCallScope timed(PMC_SCISSOR_RECT);
++    if (g_scissorUnknown || memcmp(&held, &rect, sizeof(RECT)) != 0)
+         ((PFN_SetScissorRect)g_deviceOriginals[VT_SetScissorRect])(device, &rect);
+-    }
+     g_scissorUnknown = false;
+     g_rectOverridden = memcmp(&rect, &g_gameScissorRect, sizeof(RECT)) != 0;
+     g_overrideRect = rect;
+@@ -192,12 +181,10 @@ void DeviceRestoreAll(IDirect3DDevice9* device)
+         RestoreRegisters(device, all);
+     }
+     if (g_enableOverridden) {
+-        PerfModCallScope timed(PMC_RENDER_STATE);
+         ((PFN_SetRenderState)g_deviceOriginals[VT_SetRenderState])(device, D3DRS_SCISSORTESTENABLE, g_gameScissorEnabled);
+         g_enableOverridden = false;
+     }
+     if (g_rectOverridden) {
+-        PerfModCallScope timed(PMC_SCISSOR_RECT);
+         ((PFN_SetScissorRect)g_deviceOriginals[VT_SetScissorRect])(device, &g_gameScissorRect);
+         g_rectOverridden = false;
+     }
+diff --git a/source/src/dllmain.cpp b/source/src/dllmain.cpp
+index 4802d09..ade02b3 100644
+--- a/source/src/dllmain.cpp
++++ b/source/src/dllmain.cpp
+@@ -137,7 +137,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID)
+                 g_logEnabled = true;
+             }
+         }
+-        Log("BlurVR 1.0 proxy loaded. root=%s", g_gameDir);
++        Log("BlurVR %s proxy loaded. root=%s", BLURVR_VERSION, g_gameDir);
+         InstallWindowSizeSpoof(false); // the executable's imports, before the game looks at its window
+     }
+     return TRUE;
+diff --git a/source/src/draw_dispatch.cpp b/source/src/draw_dispatch.cpp
+index 40eae35..d3c3c7a 100644
+--- a/source/src/draw_dispatch.cpp
++++ b/source/src/draw_dispatch.cpp
+@@ -219,111 +219,13 @@ static int ClassifyDraw(IDirect3DDevice9* device)
+     return 0;
+ }
+ 
+-// Diagnostic: what the game draws into the HUD during the race-start intro (letterbox bars, blur picture, light strips).
+-// A whole frame of draws is logged at a few moments after the race starts.
+ // last time a race-start intro piece (letterbox fill / blur picture) was dropped: the intro is still running only while
+ // these keep arriving (they stop the moment the player skips the lead-in)
+ static unsigned long long g_lastIntroPieceTime = 0;
+-static unsigned long long g_logHudUntilFrame = 0;
+-volatile int g_flowCaptureFrames = 0; // diagnostic (to be removed)
+-volatile unsigned g_flowFrameNo = 0;
+-unsigned g_flowCaptureLines = 0;
+-
+-void RequestHudDrawLog(int frames)
+-{
+-    g_logHudUntilFrame = g_vr.frameCount + frames;
+-}
+-
+-static bool IntroFrameLogging()
+-{
+-    if (g_vr.frameCount < g_logHudUntilFrame) {
+-        static unsigned long long headerFrame = ~0ull;
+-        if (headerFrame != g_vr.frameCount) {
+-            headerFrame = g_vr.frameCount;
+-            Log("---- HUD draws of frame %llu (level %s) ----", g_vr.frameCount, g_currentLevel);
+-        }
+-        return true;
+-    }
+-    static const unsigned long long triggers[] = {1500, 4000, 8000, 13000, 18000, 22000};
+-    static unsigned long long lastStart = 0, loggedFrame = ~0ull;
+-    static int next = 0;
+-    static bool logging = false;
+-    if (strcmp(g_currentLevel, "showroom") == 0)
+-        return false; // (the menu is not logged)
+-    if (!g_raceStartTime)
+-        return false;
+-    if (lastStart != g_raceStartTime) {
+-        lastStart = g_raceStartTime;
+-        next = 0;
+-        logging = false;
+-    }
+-    if (logging && g_vr.frameCount != loggedFrame)
+-        logging = false;
+-    if (!logging && next < 6) { // (once all six moments are done this runs for every draw: no clock reads then)
+-        unsigned long long elapsed = GetTickCount64() - g_raceStartTime;
+-        if (elapsed >= triggers[next]) {
+-            logging = true;
+-            loggedFrame = g_vr.frameCount;
+-            next++;
+-            Log("---- intro frame at +%.1fs ----", elapsed / 1000.0);
+-        }
+-    }
+-    return logging;
+-}
+-
+-static void LogIntroDraw(IDirect3DDevice9* device, const char* where, double coverage = -1.0)
+-{
+-    if (!IntroFrameLogging())
+-        return;
+-    DWORD alphaBlend = 0, srcBlend = 0, destBlend = 0, blendOp = 0, colorWrite = 0, zEnable = 0, srcAlpha = 0,
+-          destAlpha = 0, separate = 0;
+-    device->GetRenderState(D3DRS_ALPHABLENDENABLE, &alphaBlend);
+-    device->GetRenderState(D3DRS_SRCBLEND, &srcBlend);
+-    device->GetRenderState(D3DRS_DESTBLEND, &destBlend);
+-    device->GetRenderState(D3DRS_BLENDOP, &blendOp);
+-    device->GetRenderState(D3DRS_COLORWRITEENABLE, &colorWrite);
+-    device->GetRenderState(D3DRS_ZENABLE, &zEnable);
+-    device->GetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, &separate);
+-    device->GetRenderState(D3DRS_SRCBLENDALPHA, &srcAlpha);
+-    device->GetRenderState(D3DRS_DESTBLENDALPHA, &destAlpha);
+-    char textures[120] = "";
+-    for (int t = 0; t < 3; t++) {
+-        char one[40] = "-";
+-        IDirect3DBaseTexture9* bound = g_boundTextures[t];
+-        D3DSURFACE_DESC desc;
+-        if (bound && bound->GetType() == D3DRTYPE_TEXTURE && SUCCEEDED(((IDirect3DTexture9*)bound)->GetLevelDesc(0, &desc)))
+-            snprintf(one, sizeof(one), "%ux%u%s", desc.Width, desc.Height,
+-                     g_renderTargetTextures.count((void*)bound) ? "(rt)" : "");
+-        else if (bound)
+-            snprintf(one, sizeof(one), "other");
+-        strncat(textures, one, sizeof(textures) - strlen(textures) - 2);
+-        strncat(textures, t < 2 ? " " : "", 2);
+-    }
+-    DWORD stencil[6] = {0, 0, 0, 0, 0, 0};
+-    device->GetRenderState(D3DRS_STENCILENABLE, &stencil[0]);
+-    device->GetRenderState(D3DRS_STENCILFUNC, &stencil[1]);
+-    device->GetRenderState(D3DRS_STENCILREF, &stencil[2]);
+-    device->GetRenderState(D3DRS_STENCILPASS, &stencil[3]);
+-    device->GetRenderState(D3DRS_ZFUNC, &stencil[4]);
+-    device->GetRenderState(D3DRS_ZWRITEENABLE, &stencil[5]);
+-    float ps[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+-    device->GetPixelShaderConstantF(0, ps, 2);
+-    Log("  [%s] blend=%u src=%u dst=%u op=%u sepA=%u(%u,%u) cw=%x z=%u tex: %s vs=%d ps=%d ui=%d cov=%.3f vp=%u,%u,%ux%u "
+-        "scissor=%d(%d,%d,%d,%d) rt=%ux%u stencil=%u(func%u ref%u pass%u) zfunc=%u zwrite=%u ps.c0=(%.2f %.2f %.2f %.2f) c1=(%.2f %.2f %.2f %.2f)",
+-        where, alphaBlend, srcBlend, destBlend, blendOp, separate, srcAlpha, destAlpha, colorWrite, zEnable, textures,
+-        g_currentVsInfo ? g_currentVsInfo->id : -1, g_currentPsInfo ? g_currentPsInfo->id : -1,
+-        g_currentVsInfo && g_currentVsInfo->ui, coverage,
+-        (unsigned)g_gameViewport.X, (unsigned)g_gameViewport.Y, (unsigned)g_gameViewport.Width,
+-        (unsigned)g_gameViewport.Height, (int)g_gameScissorEnabled, (int)g_gameScissorRect.left,
+-        (int)g_gameScissorRect.top, (int)g_gameScissorRect.right, (int)g_gameScissorRect.bottom, g_rtWidth, g_rtHeight,
+-        stencil[0], stencil[1], stencil[2], stencil[3], stencil[4], stencil[5], ps[0], ps[1], ps[2], ps[3], ps[4], ps[5], ps[6], ps[7]);
+-}
+ 
+ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
+ {
+     PerfDrawScope perf(device);
+-    if (g_levelLoading)
+-        LogIntroDraw(device, "loading"); // only writes while a frame log was requested (see RequestHudDrawLog)
+     if (!g_cfg.loadingGlow && g_levelLoading && g_levelFilesSeen && !IsRaceMode() && g_renderTarget0 &&
+         g_renderTarget0 == g_backBufferSurface && g_boundTextures[0] &&
+         g_boundTextures[0]->GetType() == D3DRTYPE_TEXTURE && g_renderTargetTextures.count((void*)g_boundTextures[0])) {
+@@ -337,133 +239,15 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
+         if (blend && src == D3DBLEND_ONE && dest == D3DBLEND_ONE &&
+             SUCCEEDED(((IDirect3DTexture9*)g_boundTextures[0])->GetLevelDesc(0, &glowDesc)) &&
+             glowDesc.Width * 4 <= g_backBufferWidth) {
+-            static bool logged = false;
+-            if (!logged) {
+-                logged = true;
+-                Log("loading screen: glow pass (%ux%u added over the screen) skipped", glowDesc.Width, glowDesc.Height);
+-            }
+             return D3D_OK;
+         }
+     }
+-    int plan;
+-    {
+-        PerfSubScope timed(SUB_CLASSIFY);
+-        plan = ClassifyDraw(device);
+-    }
++    int plan = ClassifyDraw(device);
+     perf.Classified(plan);
+-    if (plan != 1) {
+-        PerfSubScope timed(SUB_RESTORE);
++    if (plan != 1)
+         DeviceRestoreAll(device); // only the per-eye draws below may find the device with the game's constants rewritten
+-    }
+     if (IsPhotoDraw())
+         return DrawPhotoStereo(device, draw); // the photo viewer's picture: once per eye, onto the HUD panel
+-    {   // diagnostic (to be removed): every draw of two of the logged race-intro frames, whatever it targets
+-        static unsigned long long lastFrame = ~0ull;
+-        static int idx = -1;
+-        if (IntroFrameLogging()) {
+-            if (lastFrame != g_vr.frameCount) {
+-                lastFrame = g_vr.frameCount;
+-                idx++;
+-            }
+-            if (idx == 1 || idx == 6)
+-                LogIntroDraw(device, plan == 0 ? "all p0" : plan == 1 ? "all p1" : "all p2");
+-        }
+-    }
+-    {   // diagnostic (to be removed): the game's own UI glow draws (UI shader into a render target smaller than the screen)
+-        static int uiGlowLogs = 0;
+-        if (uiGlowLogs < 120 && g_vr.active && strcmp(g_currentLevel, "showroom") == 0 && g_currentVsInfo &&
+-            g_currentVsInfo->ui && g_renderTarget0 &&
+-            g_renderTarget0 != g_backBufferSurface && !IsMainSizedTarget()) {
+-            uiGlowLogs++;
+-            char tx[120] = "";
+-            for (int t = 0; t < 2; t++) {
+-                char one[40] = "-";
+-                IDirect3DBaseTexture9* bound = g_boundTextures[t];
+-                D3DSURFACE_DESC d;
+-                if (bound && bound->GetType() == D3DRTYPE_TEXTURE && SUCCEEDED(((IDirect3DTexture9*)bound)->GetLevelDesc(0, &d)))
+-                    snprintf(one, sizeof(one), "%ux%u%s ", d.Width, d.Height, g_renderTargetTextures.count((void*)bound) ? "(rt)" : "");
+-                strncat(tx, one, sizeof(tx) - strlen(tx) - 1);
+-            }
+-            DWORD sb = 0, db = 0;
+-            device->GetRenderState(D3DRS_SRCBLEND, &sb);
+-            device->GetRenderState(D3DRS_DESTBLEND, &db);
+-            Log("ui-glow draw #%d: plan %d, rt %ux%u, tex %s, blend %u/%u, vs=%d ps=%d, vp %ux%u", uiGlowLogs, plan, g_rtWidth,
+-                g_rtHeight, tx, sb, db, g_currentVsInfo->id, g_currentPsInfo ? g_currentPsInfo->id : -1,
+-                (unsigned)g_gameViewport.Width, (unsigned)g_gameViewport.Height);
+-        }
+-    }
+-    {   // diagnostic (to be removed): which render targets and textures the post-processing and UI draws of one frame use
+-        static int flowLogs = 0;
+-        bool uiVs2 = g_currentVsInfo && g_currentVsInfo->ui;
+-        if (flowLogs < 140 && g_vr.active && g_vr.frameCount >= 300 && g_vr.frameCount < 303 && strcmp(g_currentLevel, "showroom") == 0 &&
+-            ((g_currentVsInfo && g_currentVsInfo->id == 0) || uiVs2)) {
+-            flowLogs++;
+-            char tx[200] = "";
+-            for (int t = 0; t < 4; t++) {
+-                char one[48] = "-";
+-                IDirect3DBaseTexture9* bound = g_boundTextures[t];
+-                D3DSURFACE_DESC d;
+-                if (bound && bound->GetType() == D3DRTYPE_TEXTURE && SUCCEEDED(((IDirect3DTexture9*)bound)->GetLevelDesc(0, &d)))
+-                    snprintf(one, sizeof(one), "%p:%ux%u%s", (void*)bound, d.Width, d.Height, g_renderTargetTextures.count((void*)bound) ? "rt" : "");
+-                else if (bound)
+-                    snprintf(one, sizeof(one), "%p:other", (void*)bound);
+-                strncat(tx, one, sizeof(tx) - strlen(tx) - 2);
+-                strncat(tx, " ", 2);
+-            }
+-            IDirect3DSurface9* rtS = g_renderTarget0;
+-            DWORD ab = 0;
+-            device->GetRenderState(D3DRS_ALPHABLENDENABLE, &ab);
+-            Log("flow f%llu #%d: plan %d ps=%d%s rt=%p %ux%u%s blend %u tex %s", (unsigned long long)g_vr.frameCount, flowLogs, plan,
+-                g_currentPsInfo ? g_currentPsInfo->id : -1, uiVs2 ? " UI" : "", (void*)rtS, g_rtWidth, g_rtHeight,
+-                rtS == g_backBufferSurface ? "(backbuffer)" : "", ab, tx);
+-        }
+-    }
+-    {   // diagnostic (to be removed): Num0 in game logs every non-scene draw of the next two frames (pause menu, restart screen)
+-        if (g_flowCaptureFrames > 0 && g_flowCaptureLines < 330 && plan != 1) {
+-            g_flowCaptureLines++;
+-            char tx[240] = "";
+-            for (int t = 0; t < 4; t++) {
+-                char one[56] = "- ";
+-                IDirect3DBaseTexture9* bound = g_boundTextures[t];
+-                D3DSURFACE_DESC d;
+-                if (bound && bound->GetType() == D3DRTYPE_TEXTURE && SUCCEEDED(((IDirect3DTexture9*)bound)->GetLevelDesc(0, &d)))
+-                    snprintf(one, sizeof(one), "%ux%u%s ", d.Width, d.Height, g_renderTargetTextures.count((void*)bound) ? "rt" : "");
+-                else if (bound)
+-                    snprintf(one, sizeof(one), "other ");
+-                strncat(tx, one, sizeof(tx) - strlen(tx) - 1);
+-            }
+-            DWORD ab = 0, sb = 0, db = 0;
+-            device->GetRenderState(D3DRS_ALPHABLENDENABLE, &ab);
+-            device->GetRenderState(D3DRS_SRCBLEND, &sb);
+-            device->GetRenderState(D3DRS_DESTBLEND, &db);
+-            bool uiVs3 = g_currentVsInfo && g_currentVsInfo->ui;
+-            DWORD capCw = 0, capZ = 0, capStencil = 0;
+-            device->GetRenderState(D3DRS_COLORWRITEENABLE, &capCw);
+-            device->GetRenderState(D3DRS_ZENABLE, &capZ);
+-            device->GetRenderState(D3DRS_STENCILENABLE, &capStencil);
+-            Log("cap f%u L%s plan %d vs=%d%s ps=%d rt=%ux%u%s blend %u(%u/%u) cw=%x z=%u st=%u vp %u,%u %ux%u hud-used %d tex %s", g_flowFrameNo,
+-                g_currentLevel, plan, g_currentVsInfo ? g_currentVsInfo->id : -1, uiVs3 ? "UI" : "",
+-                g_currentPsInfo ? g_currentPsInfo->id : -1, g_rtWidth, g_rtHeight,
+-                g_renderTarget0 == g_backBufferSurface ? "(bb)" : "", ab, sb, db, capCw, capZ, capStencil,
+-                (unsigned)g_gameViewport.X, (unsigned)g_gameViewport.Y, (unsigned)g_gameViewport.Width,
+-                (unsigned)g_gameViewport.Height, (int)g_hudUsed, tx);
+-        }
+-    }
+-    {   // diagnostic (to be removed): names and values of the constants of every full-screen post-processing shader, once each
+-        static bool seen[2048];
+-        bool uiVs = g_currentVsInfo && g_currentVsInfo->ui;
+-        if (g_vr.active && g_currentPsInfo && g_currentVsInfo && (uiVs || (plan == 0 && g_currentVsInfo->id == 0)) &&
+-            g_currentPsInfo->id >= 0 && g_currentPsInfo->id < 2048 && !seen[g_currentPsInfo->id]) {
+-            seen[g_currentPsInfo->id] = true;
+-            Log("post-pass shader ps=%d (rt %ux%u, plan %d, ui vs %d):", g_currentPsInfo->id, g_rtWidth, g_rtHeight, plan, (int)uiVs);
+-            for (size_t c = 0; c < g_currentPsInfo->constants.size() && c < 16; c++) {
+-                const ShaderConstant& k = g_currentPsInfo->constants[c];
+-                if (k.reg < 250)
+-                    Log("    %s r%u x%u = %.3f %.3f %.3f %.3f", k.name.c_str(), k.reg, k.count, g_psConstants[k.reg * 4],
+-                        g_psConstants[k.reg * 4 + 1], g_psConstants[k.reg * 4 + 2], g_psConstants[k.reg * 4 + 3]);
+-            }
+-        }
+-    }
+     if (plan == 0 && g_vr.active && g_cfg.uiGlowPct > 0 && g_menuGlowFrame && g_sceneDrawsThisFrame > 0 &&
+         strcmp(g_currentLevel, "showroom") != 0 && g_renderTarget0 && g_renderTarget0 == g_backBufferSurface &&
+         IsMainSizedTarget() && g_boundTextures[0] && g_boundTextures[0]->GetType() == D3DRTYPE_TEXTURE &&
+@@ -477,11 +261,6 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
+         D3DSURFACE_DESC gd;
+         if (ab && sb == D3DBLEND_ONE && db == D3DBLEND_ONE &&
+             SUCCEEDED(((IDirect3DTexture9*)g_boundTextures[0])->GetLevelDesc(0, &gd)) && gd.Width * 8 < g_backBufferWidth) {
+-            static int logged = 0;
+-            if (logged < 3) {
+-                logged++;
+-                Log("menu glow: the game's UI glow (%ux%u) kept for the layers", gd.Width, gd.Height);
+-            }
+             NoteSceneBloom(g_boundTextures[0]);
+             return D3D_OK;
+         }
+@@ -565,17 +344,13 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
+         }
+     }
+     if (plan == 0 && g_cfg.stereo && g_vr.active && IsRaceMode() && g_haveProjection &&
+-        g_currentPsInfo && g_currentPsInfo->motionBlur && g_rtWidth >= 64) {
+-        PerfSubScope timed(SUB_MOTION);
++        g_currentPsInfo && g_currentPsInfo->motionBlur && g_rtWidth >= 64)
+         return MotionBlurPerEye(device, draw);
+-    }
+     if (plan == 0 && g_cfg.stereo && g_vr.active && IsRaceMode() && g_haveProjection &&
+         g_currentPsInfo && g_currentPsInfo->lightPosReg >= 0 && g_currentVsInfo && g_rtWidth >= 64) {
+         int farCornerRegister = FindFarCornerRegister();
+-        if (farCornerRegister >= 0) {
+-            PerfSubScope timed(SUB_LIGHTS);
++        if (farCornerRegister >= 0)
+             return DrawLightsPerEye(device, draw, farCornerRegister);
+-        }
+     }
+     if (plan == 0 && IsMirrorScenePass())
+         return DrawMirrorSceneStereo(device, draw);
+@@ -628,21 +403,13 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
+                     r.right -= gutterPixels;
+                 else
+                     r.left += gutterPixels;
+-                PerfSubScope timed(SUB_EYE_SCISSOR);
+                 DeviceSetEyeScissor(device, r);
+             }
+-            {
+-                PerfSubScope timed(SUB_EYE_CONSTANTS);
+-                ApplyEyeConstants(device, e);
+-            }
++            ApplyEyeConstants(device, e);
+             float savedShadowConstants[16];
++            bool shadowApplied = mayHaveShadowDecal && ApplyShadowDecalForEye(device, e, savedShadowConstants);
+             float savedLightConstants[24];
+-            bool shadowApplied = false, lightApplied = false;
+-            if (mayHaveShadowDecal || mayHaveLightVolume) {
+-                PerfSubScope timed(SUB_HELPERS);
+-                shadowApplied = mayHaveShadowDecal && ApplyShadowDecalForEye(device, e, savedShadowConstants);
+-                lightApplied = !shadowApplied && mayHaveLightVolume && ApplyLightVolumeForEye(device, e, savedLightConstants);
+-            }
++            bool lightApplied = !shadowApplied && mayHaveLightVolume && ApplyLightVolumeForEye(device, e, savedLightConstants);
+             hr = draw();
+             if (shadowApplied)
+                 ((PFN_SetShaderConstantF)g_deviceOriginals[VT_SetPixelShaderConstantF])(
+@@ -658,7 +425,7 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
+         // (the game's constants and scissor state come back when something else uses the device: see DeviceRestoreAll)
+     } else if (g_drawIsMirror && g_cfg.mirror3d && g_cfg.hudWorldLocked && EnsureHudTargets(device) &&
+                g_mirrorSurface[0] && g_mirrorSurface[1]) {
+-        // experiment: the rear-view mirror picture goes to one layer per eye; when the mirror scene was rendered in
++        // the rear-view mirror picture goes to one layer per eye; when the mirror scene was rendered in
+         // stereo, each layer is filled from that eye's own picture
+         bool stereoPictures = PrepareMirrorEyeTextures(device, g_mirrorSource);
+         PFN_SetTexture setTexture = (PFN_SetTexture)g_deviceOriginals[VT_SetTexture];
+@@ -674,7 +441,6 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
+         if (stereoPictures)
+             setTexture(device, (DWORD)g_mirrorSlot, g_mirrorSource);
+     } else if (g_cfg.hudWorldLocked && EnsureHudTargets(device) && g_multiplySurface && IsMultiplicativeBlend(device)) {
+-        LogIntroDraw(device, "multiply");
+         hr = DrawHudToMultiplyLayer(device, base, draw);
+     } else if (g_cfg.hudWorldLocked && EnsureHudTargets(device)) {
+         // The game blurs its UI render target into a glow (the lavender halo and bright text around menu popups) and adds
+@@ -703,7 +469,6 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
+                 if (SUCCEEDED(((IDirect3DTexture9*)g_boundTextures[1])->GetLevelDesc(0, &videoDesc)) &&
+                     videoDesc.Width == 512 && videoDesc.Height == 256) {
+                     g_loadingVideoDropped = true;
+-                    LogIntroDraw(device, "dropped: video");
+                     DrawHudStencilOnly(device, base, draw);
+                     return D3D_OK;
+                 }
+@@ -726,7 +491,6 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
+                     } else if (g_sceneCompositeDrawn)
+                         g_postBackdropToTopLayer = true; /* menu: what the game draws after its backdrop copy (button
+                                                             hints of a popup) belongs above the dim */
+-                    LogIntroDraw(device, "dropped: blended scene copy (dim requested)");
+                     DrawHudStencilOnly(device, base, draw);
+                     return D3D_OK;
+                 }
+@@ -745,7 +509,6 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
+                     fabs((double)surfaceDesc.Width / surfaceDesc.Height -
+                          (double)g_backBufferWidth / g_backBufferHeight) <
+                         0.1 * g_backBufferWidth / g_backBufferHeight) {
+-                    LogIntroDraw(device, "dropped: opaque scene copy");
+                     DrawHudStencilOnly(device, base, draw);
+                     return D3D_OK;
+                 }
+@@ -804,11 +567,6 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
+                 if (known && inWin)
+                     g_lastIntroPieceTime = g_backdropDropTime;
+                 if (known && inRace && !inWin && frac >= 0.6 && g_hudUsed) {
+-                    static unsigned long long lastAutoLog = 0;
+-                    if (GetTickCount64() - lastAutoLog > 15000) {
+-                        lastAutoLog = GetTickCount64();
+-                        RequestHudDrawLog(3); // results screen: capture its draws
+-                    }
+                     g_lateUiToTopLayer = true;
+                     g_topVeilRequested = true;
+                     g_lateBackdropDrops++;
+@@ -826,7 +584,6 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
+                     g_topVeilRequested = true;
+                     g_topVeilAlpha = g_cfg.veilMenu;
+                 } // menu dialog (connecting...) dims what is behind it: keep it above the UI
+-                LogIntroDraw(device, "dropped: fill/blur piece", frac);
+                 DrawHudStencilOnly(device, base, draw);
+                 return D3D_OK;
+             }
+@@ -834,7 +591,6 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
+         if (((g_menuDialogToTopLayer && !g_sceneCompositeDrawn && strcmp(g_currentLevel, "showroom") == 0) ||
+              g_lateUiToTopLayer || g_postBackdropToTopLayer) &&
+             g_topLayerSurface) {
+-            LogIntroDraw(device, "top layer");
+             if (shadowUi)
+                 draw();
+             std::swap(g_hudSurface, g_topLayerSurface);
+@@ -845,11 +601,6 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
+             return layerResult;
+         }
+         g_hudDrawsThisFrame++;
+-        if (IntroFrameLogging()) {
+-            double coverage = 0;
+-            HudDrawCoversScreen(device, base, 2.0, &coverage, draw);
+-            LogIntroDraw(device, "hud", coverage);
+-        }
+         if (shadowUi)
+             draw();
+         hr = DrawHudToTexture(device, base, draw);
+diff --git a/source/src/draw_dispatch.h b/source/src/draw_dispatch.h
+index a03c722..beadd88 100644
+--- a/source/src/draw_dispatch.h
++++ b/source/src/draw_dispatch.h
+@@ -4,10 +4,3 @@
+ 
+ // Entry point of every game draw call: decide how to handle it (once, per eye, into a HUD layer, skipped...) and execute it through draw().
+ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw);
+-
+-// Diagnostic: log every HUD-bound draw of the next few frames (requested automatically when the results screen's backdrop
+-// pieces show up in a race; the menu is not logged).  Written to BlurVR.log; no effect on rendering.
+-void RequestHudDrawLog(int frames);
+-extern volatile int g_flowCaptureFrames; // diagnostic (to be removed)
+-extern volatile unsigned g_flowFrameNo;
+-extern unsigned g_flowCaptureLines;
+diff --git a/source/src/frame_dump.cpp b/source/src/frame_dump.cpp
+index 197e0da..9b98a1d 100644
+--- a/source/src/frame_dump.cpp
++++ b/source/src/frame_dump.cpp
+@@ -2,7 +2,6 @@
+ #include <stdio.h>
+ #include "config.h"
+ #include "core.h"
+-#include "draw_dispatch.h"
+ #include "game_mode.h"
+ #include "hud.h"
+ #include "render_state.h"
+@@ -82,33 +81,13 @@ static bool SaveSurface(IDirect3DDevice9* device, IDirect3DSurface9* source, con
+ void FrameDumpPoll(IDirect3DDevice9* device, IDirect3DSurface9* backBuffer)
+ {
+     static bool keyWasDown = false;
+-    static UINT lastWidth = 0, lastHeight = 0;
+-    static unsigned long long autoDue[2] = {0, 0};
+     static int dumps = 0;
+     bool keyDown = g_cfg.keyDump && (GetAsyncKeyState(g_cfg.keyDump) & 0x8000) != 0;
+     bool byKey = keyDown && !keyWasDown;
+     keyWasDown = keyDown;
+-    bool byTimer = false;
+-    if (g_cfg.autoDumpSeconds > 0) {
+-        D3DSURFACE_DESC desc;
+-        if (SUCCEEDED(backBuffer->GetDesc(&desc)) && (desc.Width != lastWidth || desc.Height != lastHeight)) {
+-            lastWidth = desc.Width;
+-            lastHeight = desc.Height;
+-            autoDue[0] = GetTickCount64() + (unsigned long long)g_cfg.autoDumpSeconds * 1000;
+-            autoDue[1] = GetTickCount64() + (unsigned long long)g_cfg.autoDumpSeconds * 3000;
+-        } else
+-            for (int i = 0; i < 2; i++)
+-                if (autoDue[i] && GetTickCount64() >= autoDue[i]) {
+-                    autoDue[i] = 0;
+-                    byTimer = true;
+-                }
+-    }
+-    if ((!byKey && !byTimer) || dumps >= 30)
++    if (!byKey || dumps >= 12)
+         return;
+     dumps++;
+-    // the draws of the next two frames go to the log as well (the same capture as numpad 0): what each draw targets, its plan and textures
+-    g_flowCaptureLines = 0;
+-    g_flowCaptureFrames = 2;
+     SYSTEMTIME now;
+     GetLocalTime(&now);
+     char stamp[48], path[MAX_PATH + 96];
+@@ -119,7 +98,7 @@ void FrameDumpPoll(IDirect3DDevice9* device, IDirect3DSurface9* backBuffer)
+     bool picture = SaveSurface(device, backBuffer, path);
+     Log("frame dump (%s): picture %s -> %s, back buffer %ux%u, level %s, scene draws %u, hud used %d, top layer %d, mirror %d/%d, "
+         "eye boxes L %.3f %.3f %.3f %.3f  R %.3f %.3f %.3f %.3f",
+-        byKey ? "key" : "timer", path, picture ? "saved" : "FAILED", desc.Width, desc.Height, g_currentLevel,
++        "key", path, picture ? "saved" : "FAILED", desc.Width, desc.Height, g_currentLevel,
+         g_sceneDrawsThisFrame, (int)g_hudUsed, (int)g_topLayerUsed, (int)g_mirrorUsed[0], (int)g_mirrorUsed[1],
+         g_vr.eyeBox[0].left, g_vr.eyeBox[0].right, g_vr.eyeBox[0].up, g_vr.eyeBox[0].down, g_vr.eyeBox[1].left,
+         g_vr.eyeBox[1].right, g_vr.eyeBox[1].up, g_vr.eyeBox[1].down);
+diff --git a/source/src/frame_dump.h b/source/src/frame_dump.h
+index d8381bf..0cc0035 100644
+--- a/source/src/frame_dump.h
++++ b/source/src/frame_dump.h
+@@ -1,6 +1,6 @@
+-// Diagnostic: save what is sent to the headset as .bmp files next to BlurVR.log, so a picture that looks wrong in the headset
+-// can be looked at on the PC.  A key press (numpad 8 by default) saves the finished side-by-side picture and the HUD, top and
+-// multiply layers; [Debug] AutoDumpSeconds saves the picture alone some seconds after the back buffer changed size.
++// Save what is sent to the headset as .bmp files in the BlurVR folder, so a picture that looks wrong in the headset can be looked
++// at on the PC (and attached to a bug report).  A key press (numpad 8 by default, [Debug] KeyDump) saves the finished side-by-side
++// picture and the HUD, top and multiply layers; at most 12 sets per run.
+ #pragma once
+ #include "common.h"
+ 
+diff --git a/source/src/hud.cpp b/source/src/hud.cpp
+index a08dcd6..682ac2f 100644
+--- a/source/src/hud.cpp
++++ b/source/src/hud.cpp
+@@ -6,7 +6,6 @@
+ #include "d3d_hooks.h"
+ #include "game_mode.h"
+ #include "matrix.h"
+-#include "perf_probe.h"
+ #include "render_state.h"
+ #include "vr_runtime.h"
+ 
+@@ -103,7 +102,7 @@ IDirect3DSurface9* g_topLayerSurface = NULL;
+ bool g_topLayerUsed = false;
+ static IDirect3DBaseTexture9* g_sceneBloom = NULL; // the game's bloom buffer (referenced)
+ static IDirect3DTexture9* g_multiplyTexture = NULL;
+-static IDirect3DTexture9* g_mirrorTexture[2] = {NULL, NULL}; // per-eye 3D-mirror layers (experiment)
++static IDirect3DTexture9* g_mirrorTexture[2] = {NULL, NULL}; // per-eye 3D-mirror layers
+ IDirect3DSurface9* g_mirrorSurface[2] = {NULL, NULL};
+ bool g_mirrorUsed[2] = {false, false};
+ static bool g_mirrorCreated = false;
+@@ -314,7 +313,6 @@ static double CoverageArea(const D3DVIEWPORT9& base)
+ bool HudDrawCoversScreen(IDirect3DDevice9* device, const D3DVIEWPORT9& base, double minFrac, double* outFrac,
+                                 const DrawCall& draw)
+ {
+-    PerfSubScope perfTimed(SUB_COVER);
+     if (!g_occlusionQuery && FAILED(device->CreateQuery(D3DQUERYTYPE_OCCLUSION, &g_occlusionQuery)))
+         return false;
+     if (!RunCoverageDraw(device, base, g_occlusionQuery, draw))
+@@ -346,7 +344,6 @@ CoverageSlot& HudCoverageSlot(unsigned ordinal)
+ }
+ bool HudCoverageIssue(IDirect3DDevice9* device, const D3DVIEWPORT9& base, CoverageSlot& slot, const DrawCall& draw)
+ {
+-    PerfSubScope perfTimed(SUB_COVER);
+     if (slot.pending)
+         return false;
+     if (!slot.query && FAILED(device->CreateQuery(D3DQUERYTYPE_OCCLUSION, &slot.query)))
+@@ -402,12 +399,6 @@ static void BeginLayerDepth(IDirect3DDevice9* device, LayerDepth& depth, bool dr
+     if (!depth.gameDepth)
+         return;
+     if (g_hudDepth) {
+-        static bool logged = false;
+-        if (!logged) {
+-            logged = true;
+-            Log("UI stencil: the game's UI clipping runs on a stencil buffer of the layers (game depth-stencil %p)",
+-                (void*)depth.gameDepth);
+-        }
+         g_uiGameDepth = depth.gameDepth;
+         device->GetRenderState(D3DRS_ZENABLE, &depth.zEnable);
+         device->GetRenderState(D3DRS_ZWRITEENABLE, &depth.zWrite);
+@@ -474,12 +465,6 @@ void OnGameStencilClear(IDirect3DDevice9* device, DWORD value)
+         gameDepth->Release();
+         return;
+     }
+-    static int logged = 0;
+-    if (logged < 40) {
+-        logged++;
+-        Log("UI stencil: the game cleared its UI stencil (value %u) in frame %llu: layers' stencil cleared too", (unsigned)value,
+-            (unsigned long long)g_vr.frameCount);
+-    }
+     PFN_SetRenderTarget setRenderTarget = (PFN_SetRenderTarget)g_deviceOriginals[VT_SetRenderTarget];
+     PFN_SetDepthStencilSurface setDepthStencil =
+         (PFN_SetDepthStencilSurface)g_deviceOriginals[VT_SetDepthStencilSurface];
+@@ -508,7 +493,6 @@ void OnGameStencilClear(IDirect3DDevice9* device, DWORD value)
+ // Draw one 2D HUD call into the HUD texture, with alpha accumulated so the texture can be composited later.
+ HRESULT DrawHudToTexture(IDirect3DDevice9* device, const D3DVIEWPORT9& base, const DrawCall& draw)
+ {
+-    PerfSubScope perfTimed(SUB_HUD_DRAW);
+     PFN_SetRenderTarget setRenderTarget = (PFN_SetRenderTarget)g_deviceOriginals[VT_SetRenderTarget];
+     PFN_SetViewport setViewport = (PFN_SetViewport)g_deviceOriginals[VT_SetViewport];
+     PFN_SetRenderState setRenderState = (PFN_SetRenderState)g_deviceOriginals[VT_SetRenderState];
+@@ -587,13 +571,6 @@ HRESULT DrawHudToTexture(IDirect3DDevice9* device, const D3DVIEWPORT9& base, con
+     setRenderState(device, D3DRS_COLORWRITEENABLE, stencilOnly ? 0 : 0xF);
+     hr = draw();
+     Fail::Chk(hr, alphaBlend);
+-    if (stencilOnly) {
+-        static int logged = 0;
+-        if (logged < 6) {
+-            logged++;
+-            Log("UI stencil: a stencil-only mask draw ran into the layers' stencil buffer");
+-        }
+-    }
+ 
+     setRenderState(device, D3DRS_SEPARATEALPHABLENDENABLE, separateAlpha);
+     setRenderState(device, D3DRS_SRCBLENDALPHA, srcBlendAlpha);
+@@ -629,11 +606,6 @@ HRESULT DrawHudStencilOnly(IDirect3DDevice9* device, const D3DVIEWPORT9& base, c
+     device->GetRenderState(D3DRS_STENCILZFAIL, &zFailOp);
+     if (passOp == D3DSTENCILOP_KEEP && failOp == D3DSTENCILOP_KEEP && zFailOp == D3DSTENCILOP_KEEP)
+         return D3D_OK;
+-    static int logged = 0;
+-    if (logged < 10) {
+-        logged++;
+-        Log("UI stencil: a dropped UI draw writes the stencil (pass op %u): kept as a stencil-only draw", (unsigned)passOp);
+-    }
+     DWORD colorWriteMask = 0xF;
+     device->GetRenderState(D3DRS_COLORWRITEENABLE, &colorWriteMask);
+     PFN_SetRenderState setRenderState = (PFN_SetRenderState)g_deviceOriginals[VT_SetRenderState];
+@@ -688,52 +660,6 @@ HRESULT DrawHudToMultiplyLayer(IDirect3DDevice9* device, const D3DVIEWPORT9& bas
+ 
+ 
+ 
+-// diagnostic (to be removed): brightness of a layer's content, sampled from a 96x54 copy
+-static void DiagLayerStats(IDirect3DDevice9* device, IDirect3DSurface9* layer, const char* tag)
+-{
+-    static IDirect3DSurface9 *target = NULL, *readback = NULL;
+-    static unsigned long long last[2] = {0, 0};
+-    static int count[2] = {0, 0};
+-    int which = tag[0] == 't' ? 0 : 1;
+-    unsigned long long now = GetTickCount64();
+-    if (!layer || count[which] >= 120 || now - last[which] < (which == 0 ? 250ULL : 700ULL))
+-        return;
+-    last[which] = now;
+-    if (!target) {
+-        device->CreateRenderTarget(96, 54, D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &target, NULL);
+-        device->CreateOffscreenPlainSurface(96, 54, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &readback, NULL);
+-    }
+-    D3DLOCKED_RECT lr;
+-    if (!target || !readback || FAILED(device->StretchRect(layer, NULL, target, NULL, D3DTEXF_LINEAR)) ||
+-        FAILED(device->GetRenderTargetData(target, readback)) || FAILED(readback->LockRect(&lr, NULL, D3DLOCK_READONLY)))
+-        return;
+-    int nA = 0, maxC = 0, bins[4] = {0, 0, 0, 0};
+-    double sumR = 0, sumG = 0, sumB = 0;
+-    for (int y = 0; y < 54; y++) {
+-        const unsigned* r = (const unsigned*)((const BYTE*)lr.pBits + (size_t)y * lr.Pitch);
+-        for (int x = 0; x < 96; x++) {
+-            unsigned p = r[x];
+-            if ((p >> 24) <= 128)
+-                continue;
+-            nA++;
+-            int cr = (p >> 16) & 255, cg = (p >> 8) & 255, cb = p & 255;
+-            sumR += cr;
+-            sumG += cg;
+-            sumB += cb;
+-            int m = std::max(cr, std::max(cg, cb));
+-            if (m > maxC)
+-                maxC = m;
+-            bins[m < 32 ? 0 : m < 64 ? 1 : m < 128 ? 2 : 3]++;
+-        }
+-    }
+-    readback->UnlockRect();
+-    if (nA < 20)
+-        return;
+-    count[which]++;
+-    Log("%s layer stats: area %.3f, mean rgb %.0f %.0f %.0f, max %d, pixels by max channel <32:%d <64:%d <128:%d >=128:%d",
+-        tag, nA / (96.0 * 54.0), sumR / nA, sumG / nA, sumB / nA, maxC, bins[0], bins[1], bins[2], bins[3]);
+-}
+-
+ static bool g_fullscreenVideoShown = false;
+ void NoteSceneBloom(IDirect3DBaseTexture9* bloom)
+ {
+@@ -990,16 +916,6 @@ void ComposeHudLayers(IDirect3DDevice9* device)
+         setRenderState(device, D3DRS_SRCBLEND, D3DBLEND_ONE);
+         setRenderState(device, D3DRS_DESTBLEND, D3DBLEND_ONE);
+         drawHudQuads();
+-        static unsigned long long lastGlow = 0;
+-        static int glowN = 0;
+-        unsigned long long gn = GetTickCount64();
+-        if (glowN < 12 && gn - lastGlow > 1500) {
+-            lastGlow = gn;
+-            glowN++;
+-            D3DSURFACE_DESC gd;
+-            ((IDirect3DTexture9*)g_sceneBloom)->GetLevelDesc(0, &gd);
+-            Log("UI glow added over the layers: %d%%, glow buffer %ux%u", pct, gd.Width, gd.Height);
+-        }
+     };
+     if (g_dimLevel > 0.f) {
+         // darken the scene behind the UI (stands in for the game's own dim/blur backdrop, which would otherwise cover
+@@ -1044,19 +960,14 @@ void ComposeHudLayers(IDirect3DDevice9* device)
+         setTexture(device, 0, g_hudTexture);
+     }
+     g_multiplyUsed = false;
+-    if (mirrorContent) { // experiment: the rear-view mirror picture, one layer per eye, at the HUD's distance
++    if (mirrorContent) { // the rear-view mirror picture, one layer per eye, at the HUD's distance
+         drawLayerQuads(g_mirrorTexture);
+         setTexture(device, 0, g_hudTexture);
+     }
+-    if (hudContent) {
+-        if (strcmp(g_currentLevel, "showroom") == 0)
+-            DiagLayerStats(device, g_hudSurface, "hud");
++    if (hudContent)
+         drawHudQuads();
+-    }
+     if ((topContent || topVeil) && g_topLayerTexture) {
+         // connecting spinner / dim that the game draws straight to the screen: above the UI
+-        if (topContent)
+-            DiagLayerStats(device, g_topLayerSurface, "top");
+         if (topVeil) {
+             setTexture(device, 0, NULL);
+             device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TFACTOR);
+diff --git a/source/src/hud.h b/source/src/hud.h
+index eb1e62b..a015bea 100644
+--- a/source/src/hud.h
++++ b/source/src/hud.h
+@@ -27,7 +27,7 @@ extern IDirect3DSurface9* g_hudSurface;
+ extern IDirect3DSurface9* g_topLayerSurface;
+ extern bool g_topLayerUsed;
+ extern IDirect3DSurface9* g_multiplySurface;
+-extern IDirect3DSurface9* g_mirrorSurface[2]; // per-eye layers for the 3D mirror (experiment)
++extern IDirect3DSurface9* g_mirrorSurface[2]; // per-eye layers for the 3D mirror
+ extern bool g_mirrorUsed[2];
+ extern bool g_hudUsed;
+ extern unsigned long long g_gutterClearedFrame;
+diff --git a/source/src/lens_model.cpp b/source/src/lens_model.cpp
+index 638a02f..5ab3437 100644
+--- a/source/src/lens_model.cpp
++++ b/source/src/lens_model.cpp
+@@ -62,7 +62,7 @@ static DWORD WINAPI LensReportThread(LPVOID)
+ 
+ void StartLensReportThread()
+ {
+-    if (!g_cfg.foveationReport)
++    if (!g_cfg.foveationReport || !g_logEnabled) // (it only writes a log line)
+         return;
+     HANDLE thread = CreateThread(NULL, 0, LensReportThread, NULL, 0, NULL);
+     if (thread)
+diff --git a/source/src/mirror_stereo.cpp b/source/src/mirror_stereo.cpp
+index 40ca89c..350115d 100644
+--- a/source/src/mirror_stereo.cpp
++++ b/source/src/mirror_stereo.cpp
+@@ -1,4 +1,4 @@
+-// Stereo rear-view mirror (experiment).  See mirror_stereo.h.
++// Stereo rear-view mirror.  See mirror_stereo.h.
+ #include "mirror_stereo.h"
+ #include "camera.h"
+ #include "config.h"
+diff --git a/source/src/mirror_stereo.h b/source/src/mirror_stereo.h
+index bce7188..ad07b82 100644
+--- a/source/src/mirror_stereo.h
++++ b/source/src/mirror_stereo.h
+@@ -1,4 +1,4 @@
+-// Stereo rear-view mirror (experiment): the game renders the mirror picture into a small wide render target.  Its 3D
++// Stereo rear-view mirror: the game renders the mirror picture into a small wide render target.  Its 3D
+ // draws are repeated once per eye, each into one half of that target, with the camera moved to that eye; the two halves
+ // are then copied into one texture per eye, which the UI draw of the mirror picture samples when it fills the
+ // per-eye mirror layers (see RunDraw and ComposeHudLayers).
+diff --git a/source/src/perf_probe.cpp b/source/src/perf_probe.cpp
+index 60200e6..4c6de7b 100644
+--- a/source/src/perf_probe.cpp
++++ b/source/src/perf_probe.cpp
+@@ -45,23 +45,12 @@ struct CpuAccumulator {
+     long long section[PS_COUNT];
+     long long hook, driver;
+     unsigned hookCalls, driverCalls;
+-    // per plan (0 = untouched draw, 1 = scene draw duplicated per eye, 2 = UI, 3 = not classified): draws, RunDraw ticks, driver ticks
+-    unsigned planCalls[4];
+-    long long planTicks[4], planDriver[4];
+-    long long hookTotal[PHK_COUNT], hookInner[PHK_COUNT];
+-    unsigned hookCount[PHK_COUNT];
+-    long long modCallTicks[PMC_COUNT];
+-    unsigned modCallCount[PMC_COUNT];
+-    long long subTicks[SUB_COUNT];
+-    unsigned subCount[SUB_COUNT];
+-    unsigned long long reads; // clock reads of the probe itself
+ };
+ static CpuAccumulator g_cur; // since the last frame close
+ struct DetailEntry {
+     int ps, vs;
+     unsigned width, height;
+     double ms;
+-    double gapMs; // what the phase spent after this draw before the next stamp (the CPU's gap, or GPU work that is not a draw)
+     unsigned draws;
+ };
+ static std::unordered_map<unsigned long long, DetailEntry> g_detail; // main-other draws by pixel shader and target size
+@@ -90,10 +79,8 @@ static unsigned long long g_lastLog = 0;
+ 
+ // The CPU timers use the time stamp counter: reading it costs a few nanoseconds, the performance counter about five times that, and
+ // the probe reads a clock four times per draw.  kTickSeconds is measured against the performance counter once.
+-static unsigned long long g_clockReads = 0, g_readsAtLastClose = 0;
+ long long PerfNow()
+ {
+-    g_clockReads++;
+     return (long long)__rdtsc();
+ }
+ 
+@@ -265,41 +252,15 @@ void PerfAddSection(PerfSection section, long long ticks)
+ {
+     g_cur.section[section] += ticks;
+ }
+-static int g_drawPlan = 3;
+-void PerfSetDrawPlan(int plan)
+-{
+-    g_drawPlan = plan < 0 || plan > 3 ? 3 : plan;
+-}
+-void PerfAddDraw(long long hookTicks, int plan)
++void PerfAddDraw(long long hookTicks)
+ {
+     g_cur.hook += hookTicks;
+     g_cur.hookCalls++;
+-    int p = plan < 0 || plan > 3 ? 3 : plan;
+-    g_cur.planCalls[p]++;
+-    g_cur.planTicks[p] += hookTicks;
+-    g_drawPlan = 3; // (the next draw sets its own)
+ }
+ void PerfAddDriver(long long driverTicks)
+ {
+     g_cur.driver += driverTicks;
+     g_cur.driverCalls++;
+-    g_cur.planDriver[g_drawPlan] += driverTicks;
+-}
+-void PerfAddHook(PerfHook hook, long long totalTicks, long long innerTicks)
+-{
+-    g_cur.hookTotal[hook] += totalTicks;
+-    g_cur.hookInner[hook] += innerTicks;
+-    g_cur.hookCount[hook]++;
+-}
+-void PerfAddModCall(PerfModCall call, long long ticks)
+-{
+-    g_cur.modCallTicks[call] += ticks;
+-    g_cur.modCallCount[call]++;
+-}
+-void PerfAddSub(PerfSub sub, long long ticks)
+-{
+-    g_cur.subTicks[sub] += ticks;
+-    g_cur.subCount[sub]++;
+ }
+ 
+ void PerfFrameClose(IDirect3DDevice9* device, bool sceneFrame)
+@@ -329,30 +290,10 @@ void PerfFrameClose(IDirect3DDevice9* device, bool sceneFrame)
+             g_agg.cpu.driver += g_cur.driver;
+             g_agg.cpu.hookCalls += g_cur.hookCalls;
+             g_agg.cpu.driverCalls += g_cur.driverCalls;
+-            for (int k = 0; k < 4; k++) {
+-                g_agg.cpu.planCalls[k] += g_cur.planCalls[k];
+-                g_agg.cpu.planTicks[k] += g_cur.planTicks[k];
+-                g_agg.cpu.planDriver[k] += g_cur.planDriver[k];
+-            }
+-            for (int k = 0; k < PHK_COUNT; k++) {
+-                g_agg.cpu.hookTotal[k] += g_cur.hookTotal[k];
+-                g_agg.cpu.hookInner[k] += g_cur.hookInner[k];
+-                g_agg.cpu.hookCount[k] += g_cur.hookCount[k];
+-            }
+-            for (int k = 0; k < PMC_COUNT; k++) {
+-                g_agg.cpu.modCallTicks[k] += g_cur.modCallTicks[k];
+-                g_agg.cpu.modCallCount[k] += g_cur.modCallCount[k];
+-            }
+-            for (int k = 0; k < SUB_COUNT; k++) {
+-                g_agg.cpu.subTicks[k] += g_cur.subTicks[k];
+-                g_agg.cpu.subCount[k] += g_cur.subCount[k];
+-            }
+-            g_agg.cpu.reads += g_clockReads - g_readsAtLastClose;
+         }
+     }
+     memset(&g_cur, 0, sizeof(g_cur));
+     g_lastClose = now;
+-    g_readsAtLastClose = g_clockReads;
+ }
+ 
+ static void ReadFrames()
+@@ -371,7 +312,6 @@ static void ReadFrames()
+         unsigned long long previous = 0, first = 0, last = 0;
+         double phaseMs[PH_COUNT];
+         memset(phaseMs, 0, sizeof(phaseMs));
+-        DetailEntry* lastEntry = NULL; // the bracketed draw whose interval was the previous one
+         for (int i = 0; ok && i < frame.stampCount; i++) {
+             unsigned long long ticks = 0;
+             if (frame.stamp[i]->GetData(&ticks, sizeof(ticks), 0) != S_OK) {
+@@ -393,12 +333,7 @@ static void ReadFrames()
+                     entry.height = tag.height;
+                     entry.ms += ms;
+                     entry.draws++;
+-                    lastEntry = &entry;
+-                } else if (frame.phase[i] == PH_MAIN_OTHER && lastEntry) {
+-                    lastEntry->gapMs += ms; // the interval right after a bracketed draw
+-                    lastEntry = NULL;
+-                } else
+-                    lastEntry = NULL;
++                }
+             }
+             previous = last = ticks;
+         }
+@@ -444,53 +379,6 @@ static void WriteSummary()
+                  sectionMs[PS_POSE], frameMs - hookMs - sectionSum, g_agg.cpu.hookCalls / frames,
+                  g_agg.cpu.driverCalls / frames);
+         Log("%s", line);
+-        // ---- where the CPU time goes: per plan, per hook, the mod's own device calls, pieces of RunDraw.
+-        // The clock reads of the probe are in all of these; one read costs `readNs` (measured now), a scope has two to four.
+-        long long t0 = (long long)__rdtsc();
+-        for (int k = 0; k < 2000; k++)
+-            (void)__rdtsc();
+-        double readNs = (double)((long long)__rdtsc() - t0) * toMs * 1e6 / 2000.0;
+-        double readMsPerFrame = (double)g_agg.cpu.reads / frames * readNs * 1e-6;
+-        int m = snprintf(line, sizeof(line), "perf: draws by plan (per frame: draws, RunDraw ms, of which the game's own draw call; probe clock not removed):");
+-        static const char* const kPlanNames[4] = {"plan 0 (untouched)", "plan 1 (scene, both eyes)", "plan 2 (UI)", "unclassified"};
+-        for (int k = 0; k < 4; k++)
+-            m += snprintf(line + m, sizeof(line) - m, " %s %.0f, %.2f ms (driver %.2f)%s", kPlanNames[k], g_agg.cpu.planCalls[k] / frames,
+-                          g_agg.cpu.planTicks[k] * toMs / frames, g_agg.cpu.planDriver[k] * toMs / frames, k < 3 ? ";" : "");
+-        Log("%s", line);
+-        m = snprintf(line, sizeof(line), "perf: pieces of RunDraw (per frame: calls, ms): ");
+-        static const char* const kSubNames[SUB_COUNT] = {"classify", "eye constants", "eye scissor", "decal/light helpers",
+-                                                         "motion blur", "lights", "restore at top", "UI coverage query",
+-                                                         "UI draw into the layer"};
+-        for (int k = 0; k < SUB_COUNT; k++)
+-            m += snprintf(line + m, sizeof(line) - m, "%s %.0f, %.2f%s", kSubNames[k], g_agg.cpu.subCount[k] / frames,
+-                          g_agg.cpu.subTicks[k] * toMs / frames, k + 1 < SUB_COUNT ? " | " : "");
+-        Log("%s", line);
+-        m = snprintf(line, sizeof(line), "perf: device calls the mod makes itself (per frame: calls, ms inside the call): ");
+-        static const char* const kCallNames[PMC_COUNT] = {"vertex constants", "scissor rect", "render state"};
+-        double callMs = 0;
+-        for (int k = 0; k < PMC_COUNT; k++) {
+-            double ms = g_agg.cpu.modCallTicks[k] * toMs / frames;
+-            callMs += ms;
+-            m += snprintf(line + m, sizeof(line) - m, "%s %.0f, %.2f%s", kCallNames[k], g_agg.cpu.modCallCount[k] / frames, ms,
+-                          k + 1 < PMC_COUNT ? " | " : "");
+-        }
+-        snprintf(line + m, sizeof(line) - m, " | total %.2f ms", callMs);
+-        Log("%s", line);
+-        m = snprintf(line, sizeof(line), "perf: the game's other device calls through our hooks (per frame: calls, ms in the hook, of that the real call): ");
+-        static const char* const kHookNames[PHK_COUNT] = {"SetRenderState", "SetTexture", "SetVSConst", "SetPSConst", "SetVS", "SetPS",
+-                                                          "SetRenderTarget", "SetViewport", "SetScissor", "Clear"};
+-        double hookSum = 0, hookInnerSum = 0;
+-        for (int k = 0; k < PHK_COUNT; k++) {
+-            double total = g_agg.cpu.hookTotal[k] * toMs / frames, inner = g_agg.cpu.hookInner[k] * toMs / frames;
+-            hookSum += total;
+-            hookInnerSum += inner;
+-            m += snprintf(line + m, sizeof(line) - m, "%s %.0f, %.2f (%.2f)%s", kHookNames[k], g_agg.cpu.hookCount[k] / frames, total,
+-                          inner, k + 1 < PHK_COUNT ? " | " : "");
+-        }
+-        snprintf(line + m, sizeof(line) - m, " | all hooks %.2f ms, of which the real calls %.2f", hookSum, hookInnerSum);
+-        Log("%s", line);
+-        Log("perf: probe cost: %.0f clock reads per frame at about %.1f ns = %.2f ms per frame inside the numbers above (the frame time includes it too)",
+-            (double)g_agg.cpu.reads / frames, readNs, readMsPerFrame);
+     }
+     if (g_agg.gpuFrames) {
+         double frames = g_agg.gpuFrames;
+@@ -506,7 +394,7 @@ static void WriteSummary()
+         std::vector<DetailEntry> detail;
+         for (const auto& item : g_detail)
+             detail.push_back(item.second);
+-        std::sort(detail.begin(), detail.end(), [](const DetailEntry& a, const DetailEntry& b) { return a.ms + a.gapMs > b.ms + b.gapMs; });
++        std::sort(detail.begin(), detail.end(), [](const DetailEntry& a, const DetailEntry& b) { return a.ms > b.ms; });
+         double drawMs = 0;
+         for (const DetailEntry& entry : detail)
+             drawMs += entry.ms / frames;
+@@ -515,9 +403,9 @@ static void WriteSummary()
+                      "in these draws, the rest is the gaps between them):",
+                      drawMs, g_agg.gpuMs[PH_MAIN_OTHER] / frames);
+         for (size_t d = 0; d < detail.size() && d < 8; d++)
+-            n += snprintf(line + n, sizeof(line) - n, " ps %d vs %d %ux%u %.2f ms (the interval after it %.2f ms) x%.1f%s", detail[d].ps,
+-                          detail[d].vs, detail[d].width, detail[d].height, detail[d].ms / frames, detail[d].gapMs / frames,
+-                          detail[d].draws / frames, d + 1 < detail.size() && d + 1 < 8 ? "," : "");
++            n += snprintf(line + n, sizeof(line) - n, " ps %d vs %d %ux%u %.2f ms x%.1f%s", detail[d].ps, detail[d].vs,
++                          detail[d].width, detail[d].height, detail[d].ms / frames, detail[d].draws / frames,
++                          d + 1 < detail.size() && d + 1 < 8 ? "," : "");
+         if (!detail.empty())
+             Log("%s", line);
+     } else if (g_gpuUnavailable)
+diff --git a/source/src/perf_probe.h b/source/src/perf_probe.h
+index 9cc7ef3..207d7d2 100644
+--- a/source/src/perf_probe.h
++++ b/source/src/perf_probe.h
+@@ -27,39 +27,6 @@ enum PerfSection { // CPU sections of the present path
+     PS_COUNT
+ };
+ 
+-// Where the CPU time of the mod goes (the second line group of the once-a-second summary).
+-enum PerfHook { // the non-draw device functions the mod hooks: calls, time in the hook, and of that the real call
+-    PHK_SET_RENDER_STATE,
+-    PHK_SET_TEXTURE,
+-    PHK_SET_VS_CONST,
+-    PHK_SET_PS_CONST,
+-    PHK_SET_VS,
+-    PHK_SET_PS,
+-    PHK_SET_RT,
+-    PHK_SET_VIEWPORT,
+-    PHK_SET_SCISSOR,
+-    PHK_CLEAR,
+-    PHK_COUNT
+-};
+-enum PerfModCall { // device calls the mod makes on its own (the per-eye overrides and their restore)
+-    PMC_VS_CONST,
+-    PMC_SCISSOR_RECT,
+-    PMC_RENDER_STATE,
+-    PMC_COUNT
+-};
+-enum PerfSub { // pieces of RunDraw
+-    SUB_CLASSIFY,
+-    SUB_EYE_CONSTANTS,
+-    SUB_EYE_SCISSOR,
+-    SUB_HELPERS,    // shadow decal / light volume rewrites around a duplicated draw
+-    SUB_MOTION,     // MotionBlurPerEye
+-    SUB_LIGHTS,     // DrawLightsPerEye
+-    SUB_RESTORE,    // DeviceRestoreAll at the top of RunDraw
+-    SUB_COVER,      // HudDrawCoversScreen: the occlusion query a UI draw waits for
+-    SUB_HUD_DRAW,   // DrawHudToTexture (everything but the nested cover query is counted here too)
+-    SUB_COUNT
+-};
+-
+ extern bool g_perfActive;
+ 
+ // Numpad key (or the ini) flips the probe.
+@@ -74,12 +41,8 @@ void ReleasePerf();
+ 
+ long long PerfNow();
+ void PerfAddSection(PerfSection section, long long ticks);
+-void PerfAddHook(PerfHook hook, long long totalTicks, long long innerTicks);
+-void PerfAddModCall(PerfModCall call, long long ticks);
+-void PerfAddSub(PerfSub sub, long long ticks);
+-void PerfSetDrawPlan(int plan);
+ void PerfClassifyDraw(IDirect3DDevice9* device, int plan);
+-void PerfAddDraw(long long hookTicks, int plan);
++void PerfAddDraw(long long hookTicks);
+ void PerfDrawEnd(IDirect3DDevice9* device);
+ void PerfAddDriver(long long driverTicks);
+ 
+@@ -104,83 +67,20 @@ public:
+     explicit PerfDrawScope(IDirect3DDevice9* device) : device_(device), start_(g_perfActive ? PerfNow() : 0) {}
+     void Classified(int plan)
+     {
+-        if (start_) {
+-            plan_ = plan;
+-            PerfSetDrawPlan(plan);
++        if (start_)
+             PerfClassifyDraw(device_, plan);
+-        }
+     }
+     ~PerfDrawScope()
+     {
+         if (start_) {
+             PerfDrawEnd(device_);
+-            PerfAddDraw(PerfNow() - start_, plan_);
++            PerfAddDraw(PerfNow() - start_);
+         }
+     }
+ 
+ private:
+     IDirect3DDevice9* device_;
+     long long start_;
+-    int plan_ = 3; // 3 = returned before it was classified
+-};
+-
+-// Around one non-draw hook: its time, and (Inner) the part that is the real call.
+-class PerfHookScope {
+-public:
+-    explicit PerfHookScope(PerfHook hook) : hook_(hook), start_(g_perfActive ? PerfNow() : 0) {}
+-    ~PerfHookScope()
+-    {
+-        if (start_)
+-            PerfAddHook(hook_, PerfNow() - start_, inner_);
+-    }
+-    class Inner {
+-    public:
+-        explicit Inner(PerfHookScope& scope) : scope_(scope), start_(scope.start_ ? PerfNow() : 0) {}
+-        ~Inner()
+-        {
+-            if (start_)
+-                scope_.inner_ += PerfNow() - start_;
+-        }
+-
+-    private:
+-        PerfHookScope& scope_;
+-        long long start_;
+-    };
+-
+-private:
+-    PerfHook hook_;
+-    long long start_;
+-    long long inner_ = 0;
+-};
+-
+-// Around one device call the mod makes itself.
+-class PerfModCallScope {
+-public:
+-    explicit PerfModCallScope(PerfModCall call) : call_(call), start_(g_perfActive ? PerfNow() : 0) {}
+-    ~PerfModCallScope()
+-    {
+-        if (start_)
+-            PerfAddModCall(call_, PerfNow() - start_);
+-    }
+-
+-private:
+-    PerfModCall call_;
+-    long long start_;
+-};
+-
+-// Around a piece of RunDraw.
+-class PerfSubScope {
+-public:
+-    explicit PerfSubScope(PerfSub sub) : sub_(sub), start_(g_perfActive ? PerfNow() : 0) {}
+-    ~PerfSubScope()
+-    {
+-        if (start_)
+-            PerfAddSub(sub_, PerfNow() - start_);
+-    }
+-
+-private:
+-    PerfSub sub_;
+-    long long start_;
+ };
+ 
+ // Around the game's own draw call inside a hook: the part of the time that is the driver's.
+diff --git a/source/src/vr_runtime.cpp b/source/src/vr_runtime.cpp
+index 1c66190..c2f3a5e 100644
+--- a/source/src/vr_runtime.cpp
++++ b/source/src/vr_runtime.cpp
+@@ -483,29 +483,6 @@ void VrUpdatePose()
+     g_vr.poseValid = true;
+ }
+ 
+-// What the last floating-screen picture looked like (sampled from the copy of the back buffer), logged once a second by the
+-// menu branch of VrSubmitFrame so a missing loading screen can be told apart: a black picture, or a good picture nobody sees.
+-static int g_menuMeanRgb[3] = {0, 0, 0};
+-static int g_menuLitPercent = 0;
+-static void SampleMenuPicture(const void* bits, int pitch, UINT width, UINT height)
+-{
+-    long long sum[3] = {0, 0, 0};
+-    int samples = 0, lit = 0;
+-    for (UINT gy = 0; gy < 27; gy++)
+-        for (UINT gx = 0; gx < 48; gx++) {
+-            const unsigned char* p = (const unsigned char*)bits + (size_t)(gy * height / 27) * pitch + (size_t)(gx * width / 48) * 4;
+-            sum[0] += p[2];
+-            sum[1] += p[1];
+-            sum[2] += p[0];
+-            if (p[0] + p[1] + p[2] > 72)
+-                lit++;
+-            samples++;
+-        }
+-    for (int i = 0; i < 3; i++)
+-        g_menuMeanRgb[i] = (int)(sum[i] / samples);
+-    g_menuLitPercent = lit * 100 / samples;
+-}
+-
+ static void PlaceMenuOverlay()
+ {
+     if (!g_vr.overlay)
+@@ -528,21 +505,13 @@ static void PlaceMenuOverlay()
+     transform.m[2][1] = 0;
+     transform.m[2][2] = (float)overlayZ[2];
+     transform.m[2][3] = (float)position[2];
+-    EVROverlayError placeError = g_vr.overlay->SetOverlayTransformAbsolute(
+-        g_vr.menuOverlay, ETrackingUniverseOrigin_TrackingUniverseSeated, &transform);
+-    static unsigned long long lastPlaceLog = 0;
+-    if (GetTickCount64() - lastPlaceLog > 500) {
+-        lastPlaceLog = GetTickCount64();
+-        Log("menu screen placed (frame %llu): head %.2f %.2f %.2f, forward %.2f %.2f -> screen at %.2f %.2f %.2f, result %d",
+-            g_vr.frameCount, g_vr.hmdPos[0], g_vr.hmdPos[1], g_vr.hmdPos[2], forward[0], forward[2], position[0], position[1],
+-            position[2], (int)placeError);
+-    }
++    g_vr.overlay->SetOverlayTransformAbsolute(g_vr.menuOverlay, ETrackingUniverseOrigin_TrackingUniverseSeated, &transform);
+     g_vr.menuNeedsPlacement = false;
+ }
+ 
+-// In-game switch for the 3D rear-view mirror (numpad 6 by default; see [Debug] in BlurVR.ini).  Pressing the key flips
+-// it live and writes the new state to BlurVR.log.
+-static void PollExperimentKeys()
++// In-game switches: the 3D rear-view mirror (numpad 6 by default), the timing probe (numpad 7).  Pressing the mirror key flips it
++// live and writes the new state to BlurVR.log.
++static void PollSwitchKeys()
+ {
+     static bool mirrorWasDown = false;
+     bool mirrorDown = g_cfg.keyMirror && (GetAsyncKeyState(g_cfg.keyMirror) & 0x8000) != 0;
+@@ -556,23 +525,10 @@ static void PollExperimentKeys()
+     if (perfDown && !perfWasDown)
+         PerfToggle();
+     perfWasDown = perfDown;
+-    {   // diagnostic (to be removed): Numpad 0 captures the next two frames' non-scene draws into the log
+-        static bool capWasDown = false;
+-        bool down = (GetAsyncKeyState(0x60) & 0x8000) != 0;
+-        if (down && !capWasDown) {
+-            g_flowCaptureLines = 0;
+-            g_flowCaptureFrames = 2;
+-            Log("---- draw capture armed (level %s) ----", g_currentLevel);
+-        }
+-        capWasDown = down;
+-    }
+ }
+ 
+ void VrSubmitFrame(IDirect3DDevice9* device)
+ {
+-    g_flowFrameNo++;
+-    if (g_flowCaptureFrames > 0)
+-        g_flowCaptureFrames--;
+     g_streakUsed = false;
+     if (IsRaceMode())
+         UpdateMovieState(g_sceneDrawsThisFrame > 0);
+@@ -586,7 +542,7 @@ void VrSubmitFrame(IDirect3DDevice9* device)
+     NoteSceneBloom(NULL); // the game's glow buffer is only valid for the frame it was drawn in
+     g_menuGlowFrame = IsRaceMode(); // the game's UI glow is kept in the race too (HUD, pause, restart, car selector)
+     g_hudDrawsThisFrame = 0;
+-    PollExperimentKeys();
++    PollSwitchKeys();
+     // hotkeys
+     int hotkeys[3] = {g_cfg.recenterKey, g_cfg.headTrackingKey, g_cfg.modeKey};
+     bool isDown[3];
+@@ -638,14 +594,6 @@ void VrSubmitFrame(IDirect3DDevice9* device)
+     {   // a restarted race has no level load to mark its start: the scene disappears behind the game's loading screen
+         // for a while and then comes back
+         static int noSceneFrames = 0;
+-        static unsigned long long nextBeat = 0;
+-        if (g_raceStartTime && strcmp(g_currentLevel, "showroom") == 0 && GetTickCount64() - g_raceStartTime < 150000 &&
+-            GetTickCount64() >= nextBeat) {
+-            nextBeat = GetTickCount64() + 2000;
+-            Log("heartbeat +%.0fs: scene draws %u, no-scene frames %d, overlay %d, level loading %d",
+-                (GetTickCount64() - g_raceStartTime) / 1000.0, g_sceneDrawsThisFrame, noSceneFrames,
+-                (int)g_vr.menuOverlayShown, (int)g_levelLoading);
+-        }
+         bool inShowroom = strcmp(g_currentLevel, "showroom") == 0;
+         if (inRace && g_sceneDrawsThisFrame == 0) {
+             noSceneFrames++;
+@@ -693,8 +641,6 @@ void VrSubmitFrame(IDirect3DDevice9* device)
+             D3DLOCKED_RECT lockedRect;
+             bool menuFrame = !(inRace && g_sceneDrawsThisFrame > 0);
+             if (SUCCEEDED(g_vr.readbackSurface->LockRect(&lockedRect, NULL, menuFrame ? 0 : D3DLOCK_READONLY))) {
+-                if (menuFrame)
+-                    SampleMenuPicture(lockedRect.pBits, lockedRect.Pitch, desc.Width, desc.Height);
+                 if (menuFrame && (desc.Format == D3DFMT_A8R8G8B8 || desc.Format == D3DFMT_X8R8G8B8)) {
+                     // the floating screen is blended by its alpha channel: the loading screen leaves a mix of alpha
+                     // values in the back buffer, so make the picture opaque
+@@ -756,15 +702,6 @@ void VrSubmitFrame(IDirect3DDevice9* device)
+                     PlaceMenuOverlay();
+                 texture.handle = g_vr.frameTexture;
+                 EVROverlayError textureError = g_vr.overlay->SetOverlayTexture(g_vr.menuOverlay, &texture);
+-                static unsigned long long nextMenuLog = 0;
+-                if (GetTickCount64() >= nextMenuLog) {
+-                    nextMenuLog = GetTickCount64() + 1000;
+-                    Log("menu frame %llu: picture %ux%u mean rgb %d %d %d, %d%% of samples lit, overlay shown %d / visible %d, "
+-                        "dashboard %d, SetOverlayTexture %d, loading %d, level %s",
+-                        g_vr.frameCount, desc.Width, desc.Height, g_menuMeanRgb[0], g_menuMeanRgb[1], g_menuMeanRgb[2],
+-                        g_menuLitPercent, (int)g_vr.menuOverlayShown, (int)g_vr.overlay->IsOverlayVisible(g_vr.menuOverlay),
+-                        (int)g_vr.overlay->IsDashboardVisible(), (int)textureError, (int)g_levelLoading, g_currentLevel);
+-                }
+                 if (textureError != EVROverlayError_VROverlayError_None && g_vr.submitErrs++ < 10)
+                     Log("SetOverlayTexture error %d", (int)textureError);
+                 if (!g_vr.menuOverlayShown) {
+diff --git a/source/src/window_spoof.cpp b/source/src/window_spoof.cpp
+index 9e23a5e..736094d 100644
+--- a/source/src/window_spoof.cpp
++++ b/source/src/window_spoof.cpp
+@@ -50,32 +50,17 @@ bool ReadSavedVideoSize(UINT* width, UINT* height)
+     return true;
+ }
+ 
+-// ---- the hooked user32 functions (the first few calls of each are logged, to see how the game finds out its window size)
++// ---- the hooked user32 functions: the window's size as the game reads it, and the creation of its window
+ static BOOL(WINAPI* g_realGetClientRect)(HWND, LPRECT);
+-static BOOL(WINAPI* g_realGetWindowRect)(HWND, LPRECT);
+-static BOOL(WINAPI* g_realAdjustWindowRect)(LPRECT, DWORD, BOOL);
+-static BOOL(WINAPI* g_realAdjustWindowRectEx)(LPRECT, DWORD, BOOL, DWORD);
+ static HWND(WINAPI* g_realCreateWindowExA)(DWORD, LPCSTR, LPCSTR, DWORD, int, int, int, int, HWND, HMENU, HINSTANCE, LPVOID);
+ static HWND(WINAPI* g_realCreateWindowExW)(DWORD, LPCWSTR, LPCWSTR, DWORD, int, int, int, int, HWND, HMENU, HINSTANCE, LPVOID);
+-static BOOL(WINAPI* g_realSetWindowPos)(HWND, HWND, int, int, int, int, UINT);
+ 
+-static bool LogThis(int* counter)
+-{
+-    return !g_deviceCreated && (*counter)++ < 8;
+-}
+-
+-// The game's window procedure, wrapped: its WM_SIZE says the window is 3854x1071 and the game answers with a Reset to that size.
++// The game's window procedure, wrapped: its WM_SIZE says the window is as small as Windows made it, and the game answers with a
++// Reset to that size a moment after the start.
+ static LRESULT CALLBACK GameProcHook(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
+ {
+-    if (message == WM_SIZE && wParam != SIZE_MINIMIZED) {
+-        static int logged = 0;
+-        LONG width = LOWORD(lParam), height = HIWORD(lParam);
+-        bool clamped = ClampedSize(width, height);
+-        if (logged++ < 8)
+-            Log("WM_SIZE %ldx%ld%s", width, height, clamped ? " (passed on as the size the game asked for)" : "");
+-        if (clamped)
+-            lParam = MAKELPARAM(g_intendedWidth, g_intendedHeight);
+-    }
++    if (message == WM_SIZE && wParam != SIZE_MINIMIZED && ClampedSize(LOWORD(lParam), HIWORD(lParam)))
++        lParam = MAKELPARAM(g_intendedWidth, g_intendedHeight);
+     return g_gameProcUnicode ? CallWindowProcW(g_gameProc, window, message, wParam, lParam)
+                              : CallWindowProcA(g_gameProc, window, message, wParam, lParam);
+ }
+@@ -95,48 +80,21 @@ static BOOL WINAPI H_GetClientRect(HWND window, LPRECT rect)
+     BOOL ok = g_realGetClientRect(window, rect);
+     if (!ok || !rect)
+         return ok;
+-    static int loggedBefore = 0, loggedAfter = 0;
+     LONG width = rect->right - rect->left, height = rect->bottom - rect->top;
+-    bool clamped = GetParent(window) == NULL && ClampedSize(width, height);
+-    if (width >= 640 && ((g_deviceCreated && loggedAfter++ < 8) || (!g_deviceCreated && loggedBefore++ < 8)))
+-        Log("GetClientRect(%p) -> %ldx%ld%s%s", (void*)window, width, height, clamped ? " (answered with the size the game asked for)" : "",
+-            g_deviceCreated ? " [after the device]" : "");
+-    if (clamped) {
++    if (GetParent(window) == NULL && ClampedSize(width, height)) {
++        static bool logged = false;
++        if (!logged) {
++            logged = true;
++            Log("the game's window is %ldx%ld: it is told %ux%u (the size it asked for)", width, height, g_intendedWidth, g_intendedHeight);
++        }
+         rect->right = rect->left + (LONG)g_intendedWidth;
+         rect->bottom = rect->top + (LONG)g_intendedHeight;
+     }
+     return ok;
+ }
+-static BOOL WINAPI H_GetWindowRect(HWND window, LPRECT rect)
+-{
+-    BOOL ok = g_realGetWindowRect(window, rect);
+-    static int logged = 0;
+-    if (ok && rect && GetParent(window) == NULL && LogThis(&logged))
+-        Log("GetWindowRect(%p) -> %ld,%ld %ldx%ld", (void*)window, rect->left, rect->top, rect->right - rect->left,
+-            rect->bottom - rect->top);
+-    return ok;
+-}
+-static BOOL WINAPI H_AdjustWindowRect(LPRECT rect, DWORD style, BOOL menu)
+-{
+-    static int logged = 0;
+-    if (rect && LogThis(&logged))
+-        Log("AdjustWindowRect(%ldx%ld, style %08lx)", rect->right - rect->left, rect->bottom - rect->top, (unsigned long)style);
+-    return g_realAdjustWindowRect(rect, style, menu);
+-}
+-static BOOL WINAPI H_AdjustWindowRectEx(LPRECT rect, DWORD style, BOOL menu, DWORD exStyle)
+-{
+-    static int logged = 0;
+-    if (rect && LogThis(&logged))
+-        Log("AdjustWindowRectEx(%ldx%ld, style %08lx, ex %08lx)", rect->right - rect->left, rect->bottom - rect->top,
+-            (unsigned long)style, (unsigned long)exStyle);
+-    return g_realAdjustWindowRectEx(rect, style, menu, exStyle);
+-}
+ static HWND WINAPI H_CreateWindowExA(DWORD exStyle, LPCSTR cls, LPCSTR title, DWORD style, int x, int y, int w, int h, HWND parent,
+                                      HMENU menu, HINSTANCE inst, LPVOID param)
+ {
+-    static int logged = 0;
+-    if (!parent && LogThis(&logged))
+-        Log("CreateWindowExA(style %08lx, ex %08lx) at %d,%d size %dx%d", (unsigned long)style, (unsigned long)exStyle, x, y, w, h);
+     HWND window = g_realCreateWindowExA(exStyle, cls, title, style, x, y, w, h, parent, menu, inst, param);
+     if (!parent)
+         WrapGameWindow(window, style, w);
+@@ -145,21 +103,11 @@ static HWND WINAPI H_CreateWindowExA(DWORD exStyle, LPCSTR cls, LPCSTR title, DW
+ static HWND WINAPI H_CreateWindowExW(DWORD exStyle, LPCWSTR cls, LPCWSTR title, DWORD style, int x, int y, int w, int h, HWND parent,
+                                      HMENU menu, HINSTANCE inst, LPVOID param)
+ {
+-    static int logged = 0;
+-    if (!parent && LogThis(&logged))
+-        Log("CreateWindowExW(style %08lx, ex %08lx) at %d,%d size %dx%d", (unsigned long)style, (unsigned long)exStyle, x, y, w, h);
+     HWND window = g_realCreateWindowExW(exStyle, cls, title, style, x, y, w, h, parent, menu, inst, param);
+     if (!parent)
+         WrapGameWindow(window, style, w);
+     return window;
+ }
+-static BOOL WINAPI H_SetWindowPos(HWND window, HWND after, int x, int y, int cx, int cy, UINT flags)
+-{
+-    static int logged = 0;
+-    if (GetParent(window) == NULL && !(flags & SWP_NOSIZE) && LogThis(&logged))
+-        Log("SetWindowPos(%p) %d,%d size %dx%d flags %x", (void*)window, x, y, cx, cy, flags);
+-    return g_realSetWindowPos(window, after, x, y, cx, cy, flags);
+-}
+ 
+ struct HookEntry {
+     const char* name;
+@@ -168,12 +116,8 @@ struct HookEntry {
+ };
+ static HookEntry g_hooks[] = {
+     {"GetClientRect", (void*)H_GetClientRect, (void**)&g_realGetClientRect},
+-    {"GetWindowRect", (void*)H_GetWindowRect, (void**)&g_realGetWindowRect},
+-    {"AdjustWindowRect", (void*)H_AdjustWindowRect, (void**)&g_realAdjustWindowRect},
+-    {"AdjustWindowRectEx", (void*)H_AdjustWindowRectEx, (void**)&g_realAdjustWindowRectEx},
+     {"CreateWindowExA", (void*)H_CreateWindowExA, (void**)&g_realCreateWindowExA},
+     {"CreateWindowExW", (void*)H_CreateWindowExW, (void**)&g_realCreateWindowExW},
+-    {"SetWindowPos", (void*)H_SetWindowPos, (void**)&g_realSetWindowPos},
+ };
+ 
+ static void PatchWindowImports(HMODULE mod)

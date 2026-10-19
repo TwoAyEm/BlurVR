@@ -1,0 +1,61 @@
+name: build
+
+# Every push to main, every pull request and every run by hand builds the release zip (an artifact of the run).
+# Pushing a tag v<version> (the version in source/src/core.h) also publishes it as a GitHub release.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  zip:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the Zig compiler
+        run: python -m pip install ziglang==0.16.0
+
+      - name: Build d3d9.dll (32-bit)
+        shell: cmd
+        run: source\build.bat nodeploy
+
+      - name: Make the release zip
+        run: python source/tools/make_release.py
+
+      - name: Check the zip (files, no source, tag matches the version)
+        run: |
+          $zip = (Get-ChildItem dist/BlurVR-*.zip).FullName
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { python source/tools/check_release_zip.py $zip $env:GITHUB_REF_NAME } else { python source/tools/check_release_zip.py $zip }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BlurVR-zip
+          path: dist/BlurVR-*.zip
+          if-no-files-found: error
+
+  release:
+    needs: zip
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: BlurVR-zip
+          path: dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/BlurVR-*.zip --repo "$GITHUB_REPOSITORY" --title "BlurVR ${GITHUB_REF_NAME#v}" --generate-notes
