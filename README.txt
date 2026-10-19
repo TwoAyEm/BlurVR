@@ -54,6 +54,7 @@ Keys
   Num6 3D rear-view mirror on/off (same as Mirror3D in the ini)
   Num7 timing probe on/off (see Troubleshooting)
   Num8 save what the headset sees as picture files (see Troubleshooting)
+  Num9 vertical field of view: fixed / as in 1.1 (for comparing; see OldVerticalTangents)
 
 Settings: BlurVR.ini holds only the options most people need (resolution, start size, shared-texture transport).
   Every option is listed below; add a line under its [section] in BlurVR.ini to use it (keys left out use the default shown).
@@ -74,6 +75,9 @@ Settings: BlurVR.ini holds only the options most people need (resolution, start 
   Rotation=1  Position=1   head rotation / position (lean in your seat) move the camera
   PositionScale=1.0  game units per metre
   IpdScale=1.0       scale of the eye separation (1.0 = your real IPD)
+  EyeTransform=1     1 = each eye's position (and rotation, on headsets with canted displays) from SteamVR; 0 = half the IPD to each side
+  OldVerticalTangents=0  1 = read the headset's upward and downward field of view swapped, as 1.1 did (squashed periphery on headsets
+                     that see further down than up, such as the Quest 2)
 
 [Render]
   CustomWidth=2160  CustomHeight=1200   the extra resolution offered in the game's options (0 = off)
@@ -122,7 +126,7 @@ Settings: BlurVR.ini holds only the options most people need (resolution, start 
   Distance=2.2  Width=2.6  HeightOffset=0.0    the floating screen in menus: distance (m), width (m), height relative to your eyes (m)
 
 [Debug]
-  KeyMirror3D=0x66 (Num6)   KeyPerf=0x67 (Num7)   KeyDump=0x68 (Num8)    keys for the switches above
+  KeyMirror3D=0x66 (Num6)   KeyPerf=0x67 (Num7)   KeyDump=0x68 (Num8)   KeyVerticalTangents=0x69 (Num9)    keys for the switches above
   AdjustViewRotation=1
 
 [Perf]

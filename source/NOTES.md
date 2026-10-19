@@ -949,9 +949,32 @@ What the mod does (`stereo_scene.cpp`, both only for plan-1 draws, the stereo-du
   the eye offset. The game's values are put back once both eyes are drawn. Skipped in the reflection pass: these constants describe
   the main camera there, not the mirrored one being drawn.
 
-Not checked in the headset yet. What should change: highlights and reflections on the road and the cars stay on the surface when the
+Tested in the headset (Quest 2) only together with section 24, which was the visible fix; these changes were not judged on their own. What should change: highlights and reflections on the road and the cars stay on the surface when the
 head moves, the sky shows no parallax when leaning, billboards (trees, crowds) turn towards the head, and the lighting on the road no longer
 turns with the head. `tools/hotpath_check.py` gives the same hashes as before in all eight configurations (its synthetic shaders do
 not declare these constants, so that checks only that nothing else changed); the offset formula was checked against `inverse(V * C)`
 for random cameras, mirrored ones included (worst error 2e-10).
 
+## 24. The headset's vertical field of view was read upside down (`[Tracking] OldVerticalTangents`, default 0)
+
+**Symptom** (Quest 2, showroom and races): the periphery squashed as if under a hyperbolic transform, worse when looking sideways.
+
+**Cause.** `GetProjectionRaw` gives the vertical tangents with +y pointing down: OpenVR's own `ComposeProjection` builds
+`y_ndc = (2 tan - (bottom + top)) / (bottom - top)`, so the tangent `bottom` lands at the top of the picture. `bottom` is how far the
+eye sees upwards and `-top` how far down. `SplitVerticalTangents` took `-top` as up. On the Vive and the Index up and down are nearly
+equal and the swap did not show; the Quest 2 gives `top -1.428, bottom 0.966`, i.e. 44 degrees up and 55 down, so every eye was rendered
+for 55 up / 44 down and the compositor showed it as 44 / 55. That is an affine error in tangent space (scale and offset in y), which makes
+straight lines bend and the periphery stretch or squeeze as the head turns.
+
+**Fix.** `up = bottom`, `down = -top` when `top < bottom`. Everything that reads `g_vr.eyeBox` (eye projections, mono bounds, HUD panel,
+streaks, motion blur, lights, mirror, photo viewer, desktop view) follows. Confirmed in the headset (Quest 2): the periphery is right with
+the fix, and Num9 (`[Debug] KeyVerticalTangents`, 0x69) switches live between the fixed and the old reading (`ComputeEyeBoxes` rebuilds the
+boxes; log `switch: vertical tangents ...`). The tangent log line now also prints the raw `top`/`bottom`.
+
+**Ruled out on the way, kept.** (1) Canted displays: each eye's pose now comes from `GetEyeToHeadTransform` (`[Tracking] EyeTransform`,
+default 1; rotation included, translation scaled by IpdScale and PositionScale, read every frame so the IPD can change while playing; falls
+back to half the IPD along x if the transform is not rigid or the eye is over 10 cm from the head). The function returns a 48-byte struct,
+which on 32-bit x86 comes back through a hidden first-argument pointer, so it is called with that pointer spelled out (checked against an
+MSVC-built stub). The Quest 2 has no rotation (`eye 0/1 to head: offset -/+30.7 mm, yaw 0.00 pitch 0.00 roll 0.00`), so this changes
+nothing there. (2) An off-centre game frustum: `camera2/source/Feed.cpp` can shift the view extents, but in a single view the offset is zero
+(`CameraSystem::ScreenOffset`), and the `main projection:` log line now prints the projection's off-centre terms (`off-centre x 0.0000 y 0.0000`).

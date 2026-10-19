@@ -111,9 +111,15 @@ bool TryRecoverProjection(const float* registers)
     if (logCount < 6 && fabs(yScale - lastYScale) > 1e-4) {
         lastYScale = yScale;
         logCount++;
-        Log("main projection: vfov %.1f deg, hfov %.1f deg, a=%.4f b=%.4f c=%.5f d=%.5f",
+        // off-centre terms of the projection (row 2, columns 0 and 1: a lens shift), which the decomposition assumes to be zero
+        double offsetX = 0, offsetY = 0;
+        for (int i = 0; i < 3; i++) {
+            offsetX += viewProj.m[i][0] * viewProj.m[i][3];
+            offsetY += viewProj.m[i][1] * viewProj.m[i][3];
+        }
+        Log("main projection: vfov %.1f deg, hfov %.1f deg, a=%.4f b=%.4f c=%.5f d=%.5f, off-centre x %.4f y %.4f",
             2 * atan(1.0 / yScale) * 57.29578, 2 * atan(1.0 / xScale) * 57.29578, xScale, yScale, depthScale,
-            depthBias);
+            depthBias, offsetX, offsetY);
     }
     return true;
 }
