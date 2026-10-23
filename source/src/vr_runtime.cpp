@@ -254,8 +254,8 @@ static float g_rawTangents[2][4]; // left, right, top, bottom as GetProjectionRa
 static void SplitVerticalTangents(float top, float bottom, double& up, double& down)
 {
     if (top < bottom) {
-        up = g_cfg.oldVerticalTangents ? -top : bottom;
-        down = g_cfg.oldVerticalTangents ? bottom : -top;
+        up = bottom;
+        down = -top;
     } else { // (a runtime that gives them with +y up)
         up = top;
         down = -bottom;
@@ -263,7 +263,7 @@ static void SplitVerticalTangents(float top, float bottom, double& up, double& d
 }
 
 // The per-eye tangent boxes and everything built from them, from the raw tangents read at start-up.
-static void ComputeEyeBoxes(bool log)
+static void ComputeEyeBoxes()
 {
     double fovScale = g_cfg.fovScale;
     for (int eye = 0; eye < 2; eye++) {
@@ -271,9 +271,7 @@ static void ComputeEyeBoxes(bool log)
         double up, down;
         SplitVerticalTangents(raw[2], raw[3], up, down);
         g_vr.eyeBox[eye] = {raw[0] * fovScale, raw[1] * fovScale, up * fovScale, down * fovScale};
-        if (log)
-            Log("eye %d tangents l=%.3f r=%.3f up=%.3f down=%.3f (raw top %.3f bottom %.3f)", eye, raw[0], raw[1], up, down,
-                raw[2], raw[3]);
+        Log("eye %d tangents l=%.3f r=%.3f up=%.3f down=%.3f (raw top %.3f bottom %.3f)", eye, raw[0], raw[1], up, down, raw[2], raw[3]);
     }
     g_vr.unionBox = {fmin(g_vr.eyeBox[0].left, g_vr.eyeBox[1].left), fmax(g_vr.eyeBox[0].right, g_vr.eyeBox[1].right),
                      fmax(g_vr.eyeBox[0].up, g_vr.eyeBox[1].up), fmax(g_vr.eyeBox[0].down, g_vr.eyeBox[1].down)};
@@ -360,7 +358,7 @@ bool VrInit()
         float* raw = g_rawTangents[eye];
         g_vr.system->GetProjectionRaw((EVREye)eye, &raw[0], &raw[1], &raw[2], &raw[3]);
     }
-    ComputeEyeBoxes(true);
+    ComputeEyeBoxes();
     ETrackedPropertyError propertyError = ETrackedPropertyError_TrackedProp_Success;
     float ipd = g_vr.system->GetFloatTrackedDeviceProperty(
         k_unTrackedDeviceIndex_Hmd, ETrackedDeviceProperty_Prop_UserIpdMeters_Float, &propertyError);
@@ -610,14 +608,6 @@ static void PollSwitchKeys()
     if (perfDown && !perfWasDown)
         PerfToggle();
     perfWasDown = perfDown;
-    static bool verticalWasDown = false;
-    bool verticalDown = g_cfg.keyVerticalTangents && (GetAsyncKeyState(g_cfg.keyVerticalTangents) & 0x8000) != 0;
-    if (verticalDown && !verticalWasDown) {
-        g_cfg.oldVerticalTangents = g_cfg.oldVerticalTangents ? 0 : 1;
-        Log("switch: vertical tangents %s", g_cfg.oldVerticalTangents ? "as before (up and down swapped)" : "fixed");
-        ComputeEyeBoxes(true);
-    }
-    verticalWasDown = verticalDown;
 }
 
 bool VrShowEyeOnDesktop(IDirect3DDevice9* device, RECT* presented)

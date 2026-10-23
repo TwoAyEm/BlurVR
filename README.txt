@@ -60,7 +60,6 @@ Keys
   Num6 3D rear-view mirror on/off (same as Mirror3D in the ini)
   Num7 timing probe on/off (see Troubleshooting)
   Num8 save what the headset sees as picture files (see Troubleshooting)
-  Num9 vertical field of view: fixed / as in 1.1 (for comparing; see OldVerticalTangents)
 
 Settings: BlurVR.ini holds only the options most people need (the mode, V-Sync, key repeat, resolution, shared transport).
   Every option is listed below; add a line under its [section] in BlurVR.ini to use it (keys left out use the default shown).
@@ -90,8 +89,6 @@ Settings: BlurVR.ini holds only the options most people need (the mode, V-Sync, 
   PositionScale=1.0  game units per metre
   IpdScale=1.0       scale of the eye separation (1.0 = your real IPD)
   EyeTransform=1     1 = each eye's position (and rotation, on headsets with canted displays) from SteamVR; 0 = half the IPD to each side
-  OldVerticalTangents=0  1 = read the headset's upward and downward field of view swapped, as 1.1 did (squashed periphery on headsets
-                     that see further down than up, such as the Quest 2)
 
 [Display]       (VR and flat)
   ForceNoVSync=0        1 = V-Sync off: the game runs as fast as it can. 0 = the game's own V-Sync setting (with V-Sync on the frame
@@ -151,7 +148,7 @@ Settings: BlurVR.ini holds only the options most people need (the mode, V-Sync, 
   Distance=2.2  Width=2.6  HeightOffset=0.0    the floating screen in menus: distance (m), width (m), height relative to your eyes (m)
 
 [Debug]
-  KeyMirror3D=0x66 (Num6)   KeyPerf=0x67 (Num7)   KeyDump=0x68 (Num8)   KeyVerticalTangents=0x69 (Num9)    keys for the switches above
+  KeyMirror3D=0x66 (Num6)   KeyPerf=0x67 (Num7)   KeyDump=0x68 (Num8)    keys for the switches above
   AdjustViewRotation=1
 
 [Culling]
@@ -215,8 +212,7 @@ What is new in 1.2
     tall; the Index shows 109). BlurVR now gives it a view frustum around your head, wide enough for both eyes (HeadFrustum, MarginDeg
     and PullBack under [Culling]). Drawing more of the world can cost frame time: HeadFrustum=0 gives back the old behaviour.
   * Quest 2 and other headsets that see further down than up: the upward and downward field of view were read swapped, which
-    squashed the periphery and bent lines when the head turned. Fixed (OldVerticalTangents=1 restores the old reading, Num9 switches
-    between the two for comparing).
+    squashed the periphery and bent lines when the head turned. Fixed.
   * Each eye's position and rotation come from SteamVR (EyeTransform), which covers canted displays and IPD changes while playing.
   * The camera position and the pixel shaders' camera now move with each eye, so highlights, reflections and the sky no longer slide
     over surfaces when the head moves.

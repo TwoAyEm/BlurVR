@@ -76,7 +76,6 @@ void LoadConfig()
     g_cfg.positionScale = ReadIniDouble("Tracking", "PositionScale", 1.0);
     g_cfg.ipdScale = ReadIniDouble("Tracking", "IpdScale", 1.0);
     g_cfg.eyeTransform = ReadIniInt("Tracking", "EyeTransform", 1);
-    g_cfg.oldVerticalTangents = ReadIniInt("Tracking", "OldVerticalTangents", 0);
     g_cfg.forceNoVsync = ReadIniInt("Display", "ForceNoVSync", 0, "Render");
     g_cfg.keyRepeatMs = ReadIniInt("Input", "KeyRepeatMs", 60);
     g_cfg.fovScale = ReadIniDouble("Render", "FovScale", 1.0);
@@ -128,7 +127,6 @@ void LoadConfig()
     g_cfg.sharedTransport = ReadIniInt("VR", "SharedTransport", 1, "Render");
     g_cfg.perfEnabled = ReadIniInt("Perf", "Enabled", 0);
     g_cfg.keyPerf = ReadIniInt("Debug", "KeyPerf", 0x67);
-    g_cfg.keyVerticalTangents = ReadIniInt("Debug", "KeyVerticalTangents", 0x69);
     g_cfg.keyDump = ReadIniInt("Debug", "KeyDump", 0x68);
     g_cfg.coverageEvery = ReadIniInt("Hud", "CoverageEvery", 8);
     g_cfg.desktopPresentEvery = ReadIniInt("VR", "DesktopPresentEvery", 1, "Render");

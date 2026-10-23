@@ -992,7 +992,7 @@ turns with the head. `tools/hotpath_check.py` gives the same hashes as before in
 not declare these constants, so that checks only that nothing else changed); the offset formula was checked against `inverse(V * C)`
 for random cameras, mirrored ones included (worst error 2e-10).
 
-## 24. The headset's vertical field of view was read upside down (`[Tracking] OldVerticalTangents`, default 0)
+## 24. The headset's vertical field of view was read upside down
 
 **Symptom** (Quest 2, showroom and races): the periphery squashed as if under a hyperbolic transform, worse when looking sideways.
 
@@ -1005,8 +1005,9 @@ straight lines bend and the periphery stretch or squeeze as the head turns.
 
 **Fix.** `up = bottom`, `down = -top` when `top < bottom`. Everything that reads `g_vr.eyeBox` (eye projections, mono bounds, HUD panel,
 streaks, motion blur, lights, mirror, photo viewer, desktop view) follows. Confirmed in the headset (Quest 2): the periphery is right with
-the fix, and Num9 (`[Debug] KeyVerticalTangents`, 0x69) switches live between the fixed and the old reading (`ComputeEyeBoxes` rebuilds the
-boxes; log `switch: vertical tangents ...`). The tangent log line now also prints the raw `top`/`bottom`.
+the fix. For comparing, the old reading was kept behind `[Tracking] OldVerticalTangents` and a live switch on Num9 (`[Debug] KeyVerticalTangents`); both
+were removed once the fix had been confirmed on a Quest and with SteamVR, and `SplitVerticalTangents` only has the fixed reading now. The tangent log line
+also prints the raw `top`/`bottom`.
 
 **Ruled out on the way, kept.** (1) Canted displays: each eye's pose now comes from `GetEyeToHeadTransform` (`[Tracking] EyeTransform`,
 default 1; rotation included, translation scaled by IpdScale and PositionScale, read every frame so the IPD can change while playing; falls
