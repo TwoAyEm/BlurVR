@@ -253,9 +253,135 @@ static HRESULT DrawGlowAtStrength(IDirect3DDevice9* device, const DrawCall& draw
     return hr;
 }
 
+// ---- a menu on top of a race (see draw_dispatch.h)
+// Blur's pause and results menus dim the race with a UI-shader fill that covers most of the screen (the VR path drops those fills: the `known` pieces whose
+// coverage is 0.6 and more).  Flat there is no scratch target to measure on, so the coverage of the real draw is measured where it is made: an occlusion
+// query around the draw counts the pixels it wrote, and the answer is picked up a frame or two later without waiting.  A blended UI-shader draw onto the
+// back buffer in a race that wrote at least 60 % of the screen is such a fill.  In VR the pause dim the HUD path has already found is used instead
+// (g_menuDimLast): the draws are redirected there, so a count on the real target would see nothing.  The fill has to be there for 250 ms before the
+// overlay counts as up (a screen flash is shorter) and gone for 150 ms before it is down again.
+struct RaceQuery {
+    IDirect3DQuery9* query = NULL;
+    bool pending = false;
+    unsigned long long issuedMs = 0;
+    int vs = 0;
+};
+static RaceQuery g_raceQueries[48];
+static bool g_raceQueriesBroken = false;
+static unsigned long long g_raceFillLastMs = 0, g_raceFillSinceMs = 0;
+static bool g_raceMenuUp = false;
+bool RaceMenuOverlay()
+{
+    return g_raceMenuUp;
+}
+void ReleaseRaceMenuQueries()
+{
+    for (RaceQuery& entry : g_raceQueries) {
+        if (entry.query)
+            entry.query->Release();
+        entry.query = NULL;
+        entry.pending = false;
+    }
+}
+// Is this draw one whose coverage is worth measuring?  Then the slot of a query that has been started around it.
+static RaceQuery* BeginRaceMenuMeasure(IDirect3DDevice9* device)
+{
+    if (g_raceQueriesBroken || g_vr.active || !g_renderTarget0 || g_renderTarget0 != g_backBufferSurface || !g_levelFilesSeen ||
+        !IsMainSizedTarget() || !g_currentVsInfo || !g_currentVsInfo->ui || !g_currentVsInfo->tracked.empty())
+        return NULL;
+    DWORD alphaBlend = 0;
+    device->GetRenderState(D3DRS_ALPHABLENDENABLE, &alphaBlend);
+    if (!alphaBlend || strcmp(g_currentLevel, "showroom") == 0)
+        return NULL;
+    RaceQuery* slot = NULL;
+    for (RaceQuery& entry : g_raceQueries)
+        if (!entry.pending) {
+            slot = &entry;
+            break;
+        }
+    if (!slot)
+        return NULL;
+    if (!slot->query && FAILED(device->CreateQuery(D3DQUERYTYPE_OCCLUSION, &slot->query))) {
+        g_raceQueriesBroken = true;
+        Log("race menu: no occlusion queries on this device, a menu in a race is not recognised");
+        return NULL;
+    }
+    if (FAILED(slot->query->Issue(D3DISSUE_BEGIN)))
+        return NULL;
+    slot->pending = true;
+    slot->issuedMs = GetTickCount64();
+    slot->vs = g_currentVsInfo->id;
+    return slot;
+}
+// Round a draw with the query: started in the constructor (when the draw is a candidate), ended when RunDraw is left.
+class RaceMenuMeasure {
+public:
+    explicit RaceMenuMeasure(IDirect3DDevice9* device) : slot_(NULL)
+    {
+        if (g_cfg.enabled && g_cfg.keyRepeatMs > 0)
+            slot_ = BeginRaceMenuMeasure(device);
+    }
+    ~RaceMenuMeasure()
+    {
+        if (slot_)
+            slot_->query->Issue(D3DISSUE_END);
+    }
+
+private:
+    RaceQuery* slot_;
+};
+void RaceMenuOverlayEndFrame()
+{
+    unsigned long long now = GetTickCount64();
+    const double area = (double)g_backBufferWidth * (double)g_backBufferHeight;
+    for (RaceQuery& entry : g_raceQueries) {
+        if (!entry.pending)
+            continue;
+        DWORD pixels = 0;
+        HRESULT hr = entry.query->GetData(&pixels, sizeof(pixels), 0);
+        if (hr == S_FALSE) {
+            if (now - entry.issuedMs > 1000) // never came back (a reset, a lost device)
+                entry.pending = false;
+            continue;
+        }
+        entry.pending = false;
+        if (hr != S_OK || area <= 0.0)
+            continue;
+        double coverage = pixels / area;
+        if (g_logEnabled && coverage >= 0.2) {
+            // (Log=1) which UI draws cover a good part of the screen: if a pause menu is not recognised, this says how much of it its fill covers
+            static std::unordered_set<int> probed;
+            int key = entry.vs * 16 + (int)(coverage * 10.0 + 0.5);
+            if (probed.size() < 40 && probed.insert(key).second)
+                Log("race menu probe: a blended UI draw (vertex shader %d) wrote %.0f%% of the screen", entry.vs, coverage * 100.0);
+        }
+        if (coverage >= 0.6)
+            g_raceFillLastMs = now;
+    }
+    if (g_vr.active && g_menuDimLast)
+        g_raceFillLastMs = now;
+    bool recent = g_raceFillLastMs && now - g_raceFillLastMs <= 150;
+    if (recent) {
+        if (!g_raceFillSinceMs)
+            g_raceFillSinceMs = g_raceFillLastMs;
+        // (counted from the first to the last sighting of the fill, not up to now: the 150 ms of grace must not make a short flash last)
+        if (!g_raceMenuUp && g_raceFillLastMs - g_raceFillSinceMs >= 250) {
+            g_raceMenuUp = true;
+            Log("race menu: up (a UI fill covering the screen has been drawn for 250 ms; menu key repeat limited)");
+        }
+    } else {
+        g_raceFillSinceMs = 0;
+        if (g_raceMenuUp) {
+            g_raceMenuUp = false;
+            Log("race menu: gone");
+        }
+    }
+}
+
 HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
 {
     PerfDrawScope perf(device);
+    RaceMenuMeasure raceMenuMeasure(device);
     if (g_cfg.bloomPct != 100 && g_levelLoading && g_levelFilesSeen && !IsRaceMode() && g_renderTarget0 &&
         g_renderTarget0 == g_backBufferSurface && g_boundTextures[0] &&
         g_boundTextures[0]->GetType() == D3DRTYPE_TEXTURE && g_renderTargetTextures.count((void*)g_boundTextures[0])) {

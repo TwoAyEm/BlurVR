@@ -56,6 +56,7 @@ Keys
       BlurVR also recenters at the start of every race (set AutoRecenter=0 in BlurVR.ini to turn that off).
   F10 head tracking on/off (stereo image stays, camera stops following your head)
   F8  mode override: AUTO -> FORCE MENU -> FORCE RACE. Use it if the mod picks the wrong mode.
+      Flat (Stereo=0) it does the same job for the menu key repeat limit: AUTO -> forced on -> forced off.
   Num6 3D rear-view mirror on/off (same as Mirror3D in the ini)
   Num7 timing probe on/off (see Troubleshooting)
   Num8 save what the headset sees as picture files (see Troubleshooting)
@@ -65,7 +66,7 @@ Settings: BlurVR.ini holds only the options most people need (the mode, resoluti
   Every option is listed below; add a line under its [section] in BlurVR.ini to use it (keys left out use the default shown).
   Edit with the game closed. Delete BlurVR.ini to go back to all defaults.
   The mod has three states: Enabled=0 does nothing at all; Enabled=1 with Stereo=1 is VR; Enabled=1 with Stereo=0 is "flat": the
-  game stays on the monitor, SteamVR is never started and only the [Display] settings apply. The [VR] and [Render] settings are
+  game stays on the monitor, SteamVR is never started and only the [Display] and [Input] settings apply. The [VR] and [Render] settings are
   ignored when flat (the extra resolution is not offered either), so the game starts at the size it saved.
   Settings that moved are read from their new place only: an older BlurVR.ini keeps working for Stereo, ForceNoVSync, SharedTransport,
   DesktopView, DesktopPresentEvery, FitDesktopWindow (still read from [Render]) and for CustomWidth / CustomHeight (read as Resolution),
@@ -74,7 +75,7 @@ Settings: BlurVR.ini holds only the options most people need (the mode, resoluti
 
 [General]
   Enabled=1          master switch. 0 = the mod does nothing at all (the game runs as if it were not installed)
-  Stereo=1           1 = VR. 0 = flat: no SteamVR and no VR changes to the game; only the [Display] settings apply
+  Stereo=1           1 = VR. 0 = flat: no SteamVR and no VR changes to the game; only [Display] and [Input] apply
   Log=0              1 = write BlurVR\BlurVR.log (for bug reports; the log of the previous run is kept as BlurVR.previous.log)
   RecenterKey=0x78   virtual-key codes (hex): F9 recenter
   ToggleKey=0x79     F10 head tracking on/off
@@ -96,6 +97,16 @@ Settings: BlurVR.ini holds only the options most people need (the mode, resoluti
   ForceNoVSync=0        1 = V-Sync off: the game runs as fast as it can. 0 = the game's own V-Sync setting (with V-Sync on the frame
                         rate follows the monitor, e.g. 60). In VR this key is ignored: V-Sync is always off there and the headset's
                         own refresh rate (90, 120, 144 ...) sets the frame rate
+
+[Input]         (VR and flat)
+  KeyRepeatMs=60        in the game's menus a held key or pad button repeats once every this many milliseconds, whatever the frame rate (0 = as the
+                        game does it). Blur counts how long a key is held in frames and, after a second, repeats it every frame, so at
+                        300 fps a held arrow key scrolls a menu 300 times a second. BlurVR instead gives the game a tap, a wait of half
+                        a second, then a tap every KeyRepeatMs; the game never sees the key held. Races are not touched (the arrow keys
+                        steer there) except while a pause or results menu is up over one: BlurVR recognises it by the full-screen dim the
+                        game draws behind it (Log=1 writes "race menu: up" / "gone" to BlurVR.log). If it is not recognised, F8 forces
+                        the limit on (press F8 once while the menu is up, F8 twice = off, three times = automatic again). The pad (XInput) gets
+                        the same rule: its buttons, the D-pad and the left stick's four directions; the triggers and the right stick do not.
 
 [VR]            (ignored when Stereo=0)
   Resolution=2160x1200  the size of the VR picture, both eyes side by side (see Resolution above). It is the extra entry in the
@@ -186,7 +197,7 @@ Troubleshooting
   A bug report should also include BlurVR.log: set Log=1 under [General], reproduce the problem, close the game, and send BlurVR\BlurVR.log.
   Slow: lower Resolution under [VR]. Num7 (or Enabled=1 under [Perf], with Log=1) writes timing lines to the log.
   If SharedTransport (on by default in VR) gives odd textures or a black picture on your graphics card, add SharedTransport=0 under [VR].
-  To run the game flat, set Stereo=0 (SteamVR is not used; the [Display] settings still apply), or Enabled=0 (the mod does nothing),
+  To run the game flat, set Stereo=0 (SteamVR is not used; the [Display] and [Input] settings still apply), or Enabled=0 (the mod does nothing),
   or run uninstall.bat.
 
 What is new in 1.3

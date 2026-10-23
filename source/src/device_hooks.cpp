@@ -9,6 +9,7 @@
 #include "game_camera.h"
 #include "game_mode.h"
 #include "hud.h"
+#include "input_limiter.h"
 #include "mirror_stereo.h"
 #include "perf_probe.h"
 #include "photo_stereo.h"
@@ -76,6 +77,7 @@ static HRESULT STDMETHODCALLTYPE H_Present(IDirect3DDevice9* d, const RECT* a, c
     }
     PerfPoll();
     GameCameraPoll();
+    InputLimiterFrame();
     return hr;
 }
 
@@ -87,6 +89,7 @@ static HRESULT STDMETHODCALLTYPE H_Reset(IDirect3DDevice9* d, D3DPRESENT_PARAMET
     ReleaseTexturePitchState();
     ReleasePerf();
     ReleaseHud();
+    ReleaseRaceMenuQueries();
     ReleaseStreakLayer();
     ReleaseMirrorStereo();
     ReleasePhotoStereo();

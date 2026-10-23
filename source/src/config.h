@@ -4,7 +4,7 @@
 
 struct Config {
     int enabled = 1, log = 0; // enabled: [General] Enabled, the master switch (0 = the mod does nothing); log: BlurVR.log is only written with Log=1 under [General]
-    int vr = 1;               // enabled AND stereo: the VR half of the mod runs (SteamVR, the size override, the Ex device, ...).  Enabled=1 Stereo=0 is "flat": only the [Display] settings apply
+    int vr = 1;               // enabled AND stereo: the VR half of the mod runs (SteamVR, the size override, the Ex device, ...).  Enabled=1 Stereo=0 is "flat": only the [Display] and [Input] settings apply
     int recenterKey = 0x78;     // F9
     int headTrackingKey = 0x79; // F10
     int modeKey = 0x77;         // F8: auto -> force menu -> force race
@@ -51,6 +51,7 @@ struct Config {
     double mirrorHeadParallax = 1.0;  // how much of the head position moves the rear view (0 = only the eye separation)
     // in-game toggle key for the 3D mirror (virtual-key code, 0 = unused); numpad 6 by default
     int keyMirror = 0x66;
+    int keyRepeatMs = 60; // [Input] KeyRepeatMs: menu keys repeat at most once per this many ms, whatever the frame rate (input_limiter.cpp); 0 = as the game does it
     int forceNoVsync = 0; // [Display] ForceNoVSync: 1 = present without V-Sync, 0 = the game's own setting.  In VR it is always off: the headset sets the frame rate
     int autoRecenter = 1; // 1 = recentre (SteamVR zero pose) every time a race starts; 0 = only on the recentre key
     int perfEnabled = 0;  // [Perf] Enabled: log GPU and CPU frame timing once a second (perf_probe.cpp); the key below flips it live

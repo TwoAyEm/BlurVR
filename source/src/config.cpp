@@ -78,6 +78,7 @@ void LoadConfig()
     g_cfg.eyeTransform = ReadIniInt("Tracking", "EyeTransform", 1);
     g_cfg.oldVerticalTangents = ReadIniInt("Tracking", "OldVerticalTangents", 0);
     g_cfg.forceNoVsync = ReadIniInt("Display", "ForceNoVSync", 0, "Render");
+    g_cfg.keyRepeatMs = ReadIniInt("Input", "KeyRepeatMs", 60);
     g_cfg.fovScale = ReadIniDouble("Render", "FovScale", 1.0);
     g_cfg.mainPassMinWidthFraction = ReadIniDouble("Render", "MainPassMinWidthFraction", 0.9);
     g_cfg.requireDepthBuffer = ReadIniInt("Render", "RequireDepthBuffer", 1);

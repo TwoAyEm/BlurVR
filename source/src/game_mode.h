@@ -13,6 +13,9 @@ extern unsigned g_sceneProbeDraws;
 extern int g_sceneProbeFrames;
 // True while a 3D scene (a race or the showroom) is on screen; false during loading screens.
 bool IsRaceMode();
+// True while the front-end menus are up: no level has been opened yet, or the last one is the showroom.  Works with or without VR (it only needs the
+// file-open hooks).  A pause menu inside a race is not recognised.  g_modeOverride (F8, StartMode) forces it either way.
+bool InMenuScene();
 // Name of the level most recently opened by the game ("showroom" is the menu backdrop).
 extern char g_currentLevel[64];
 // Movies (the tutorial videos and cutscenes, UI\movies\*.bik): the game opens the file, then stops drawing its 3D scene

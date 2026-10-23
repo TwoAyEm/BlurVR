@@ -6,6 +6,7 @@
 #include "d3d_hooks.h"
 #include "display_modes.h"
 #include "game_mode.h"
+#include "input_limiter.h"
 #include "perf_probe.h"
 #include "video_settings.h"
 #include "window_spoof.h"
@@ -44,6 +45,7 @@ IDirect3D9* WINAPI Direct3DCreate9(UINT sdk)
         d3d = g_realDirect3DCreate9(sdk);
     Log("Direct3DCreate9(%u) -> %p", sdk, (void*)d3d);
     InstallWindowSizeSpoof(true); // every module (DllMain patched the executable)
+    InstallInputHooks();          // (again: harmless when DllMain did it)
     if (d3d)
         HookDirect3D(d3d);
     return d3d;
@@ -144,8 +146,9 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved)
         if (!g_cfg.enabled)
             Log("Enabled=0 in the ini: the mod does nothing and the game runs as it would without it");
         else if (!g_cfg.stereo)
-            Log("Stereo=0 in the ini: flat mode, SteamVR is not started and only the [Display] settings apply");
+            Log("Stereo=0 in the ini: flat mode, SteamVR is not started and only the [Display] and [Input] settings apply");
         VideoSettingsStart();          // the game's saved display mode, before the game reads it
+        InstallInputHooks();           // menu key repeat: the game's keyboard polls
         InstallWindowSizeSpoof(false); // the executable's imports, before the game looks at its window
     }
     return TRUE;

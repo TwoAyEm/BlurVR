@@ -12,6 +12,14 @@ volatile bool g_levelLoading =
     true; // a level is being loaded: show the floating screen until a 3D scene is drawing
 unsigned g_sceneProbeDraws = 0;
 int g_sceneProbeFrames = 0;
+bool InMenuScene()
+{
+    if (g_modeOverride == 1)
+        return true;
+    if (g_modeOverride == 2)
+        return false;
+    return !g_levelFilesSeen || strcmp(g_currentLevel, "showroom") == 0;
+}
 bool IsRaceMode()
 {
     return g_modeOverride == 2 || (g_modeOverride == 0 && g_levelFilesSeen && !g_levelLoading);

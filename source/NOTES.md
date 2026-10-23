@@ -308,12 +308,13 @@ the ini, comments included, are kept).  The first `CreateDevice` is never taken 
 
 The mod has three states. `Enabled` (1) is the master switch: 0 = the mod does nothing. `Stereo` (1, `[General]`) picks the half: 1 = VR, 0 = flat
 (SteamVR, the size override, the D3D9Ex device, the extra video mode, the head-frustum hook and every `[VR]` / `[Render]` setting are off; only `[Display]`
-applies).  `LoadConfig` computes `g_cfg.vr = enabled && stereo`; VR-only code asks `g_cfg.vr`, not `g_cfg.enabled`, and the `[VR]` values that act without
+and `[Input]` apply).  `LoadConfig` computes `g_cfg.vr = enabled && stereo`; VR-only code asks `g_cfg.vr`, not `g_cfg.enabled`, and the `[VR]` values that act without
 looking at `g_cfg.vr` (Bloom, NoLensFlare, the sizes) are forced to "as the game draws it" when flat.  A key that moved is still read from its old section
 where `ReadIniInt(..., oldSection)` says so: Stereo, ForceNoVSync, SharedTransport, DesktopView, DesktopPresentEvery, FitDesktopWindow from `[Render]`.
 `[General]` Enabled, Stereo, Log (0), AutoRecenter (1), RecenterKey (0x78 F9), ToggleKey (0x79 F10), ModeKey (0x77 F8), StartMode (0 auto /
 1 floating screen / 2 race), ThreadedInit, DeferVR.
 `[Display]` (VR and flat) ForceNoVSync (0; in VR V-Sync is always off, the headset paces the game).
+`[Input]` (VR and flat) KeyRepeatMs (60 ms; 0 = off): menu key repeat limiter, `input_limiter.cpp` (section 19).
 `[VR]` (ignored when flat) Resolution (WxH, 2160x1200; `CustomWidth`/`CustomHeight` of `[Render]` are read when it is missing), Bloom (100 %: the game's glow around
 menus, UI and loading screens; 0 = none), NoLensFlare (0; 1 drops the flare sprites and the bloom/glow around lights), SharedTransport (1, section 15),
 DesktopView (left / right / both; 1 / 2 / 0 still read), DesktopPresentEvery (1, section 18), FitDesktopWindow (1).
@@ -418,6 +419,7 @@ callback type; each module header lists what the module exports (with one-line c
 | `game_camera` | Hooks on the game's camera hand-over to its views (section 25): the game culls with a frustum around the head (`[Culling] HeadFrustum`), once the main camera is recognised and the frustum layout checked. | `GameCameraPoll` |
 | `window_spoof` | Section 16: answers the game's window-size queries (GetClientRect, WM_SIZE) with the size it asked for when Windows clamped the window to the desktop. | `InstallWindowSizeSpoof`, `WindowSpoofIntendedSize`, `ReadSavedVideoSize` |
 | `video_settings` | Where the display mode lives: BlurVR.ini `[VR] Resolution` in VR, settings.xml (restored at exit) for the flat game. | `VideoSettingsStart`, `VideoSettingsEnd`, `VideoSettingsNoteMode` |
+| `input_limiter` | Menu key repeat limiter (`[Input] KeyRepeatMs`): hooks the game's DirectInput keyboard poll and `GetKeyState`, shows a held key as a tap and then a tap every interval, in the menus only. | `InstallInputHooks`, `InputLimiterFrame`, `KeyRepeatShownDown` |
 | `display_modes` | Extra display mode for the game's resolution list, and the IDirect3D9 hooks. | `BuildModeList`, `H_GetAdapterModeCount`, `H_EnumAdapterModes`, `AdjustPresentParams`, `H_CreateDevice`, `HookDirect3D` |
 | `dllmain` | d3d9.dll exports (forwarded to the real d3d9.dll) and DllMain. | `Direct3DCreate9`, `Direct3DCreate9Ex`, `RealProc`, `D3DPERF_BeginEvent`, `D3DPERF_EndEvent`, `D3DPERF_SetMarker`, `D3DPERF_SetRegion`, `D3DPERF_QueryRepeatFrame`, `D3DPERF_SetOptions`, `D3DPERF_GetStatus`, `DllMain` |
 
@@ -1034,3 +1036,70 @@ nothing there. (2) An off-centre game frustum: `camera2/source/Feed.cpp` can shi
 **Other builds.**  Run in the headset: the Steam build (14,087,680 bytes, PE time stamp `0x4BFC8EA9`): signature scan resolves, layout verified; and a `Blur.exe` of 13,738,496 bytes that is the same code without the Steam wrapper (same PE time stamp and `.text`, no `.bind` section, image `0xE5B000`, the real entry point `0x944515`; the camera functions are at the same addresses, so the earlier hard-coded version only rejected it because its guard compared the image size and entry point): the head frustum works there (reported from the headset; that run had no log).  A host test (the scratchpad harness, `game_camera.cpp` included directly, real probe sample) checks: the scan on the real bytes of the two functions cut out of the dump (found, ambiguous with two copies, loose-only when a displacement differs, refused when the description is smaller than 0x2b0 bytes, accepted when a little bigger, nothing found in empty code); the layout check passing on the sample and failing for swapped left/right planes, a plane count of 5, a wrong field of view, no field of view and planes shifted one slot; the main-camera test accepting the main camera and its 62.4-degree variant and rejecting the mirror's projection, a mirrored camera, a backward camera and an upside-down one; the hooks against stubs (rewrite for the main camera, nothing for a mirrored one, a lone `SetCamera`, a failed layout, or HeadFrustum=0).  For a new build: `tools/camera_sig_check.py` on its `Blur.exe` (a dump of the running module if the file is encrypted on disk), then the headset with `Log=1`; no build counts as supported before that.
 
 **Open points.**  The eight points at `+0x230` are unexplained and not used by this.  The shadow views were not looked at.  The reflection and rear-view mirror views cull with their own cameras and are not changed.  `Camera2.Chase2.Fov` and the other tweakable variables of the game (about 3400, `{vtable, next, prev, name, ..., value at +0x24}` static objects in `.data`, the type is the vtable: float `0x00E83B68`, bool `0x00E83B80`, int `0x00E83B50`) can be changed from outside; nothing in the mod does that.
+
+## 19. Menu key repeat (`[Input] KeyRepeatMs`, default 60 ms)
+
+**The problem.** Blur's menus make their own auto-repeat from how long a key has been held, counted in frames (the same cause as the other fast-FPS bugs of
+https://github.com/Aib0t/write-ups/blob/main/blur-fps-unlock/readme.md): after a second the held key repeats on *every* frame, so at 300 fps a held arrow key
+scrolls a menu about 300 times a second (about 30 was the design). That write-up fixes it in the game's UI broadcast function (it drops auto-fire messages
+that come less than 60 ms after the last one, which felt better than 33 ms). BlurVR has no hook there (the addresses are not published, and Blur.exe is
+under the Steam wrapper), and the request was a limiter on the keyboard, so it works at the poll instead.
+
+**Where the game reads the keyboard.** Blur.exe imports `DINPUT8.dll!DirectInput8Create`, `USER32!GetKeyState`, raw input (`RegisterRawInputDevices`,
+`GetRawInputData`) and `XINPUT1_3`. The keyboard is *polled* either way (DirectInput has no key repeat of its own, and a polled `GetKeyState` has none), which
+is why the repeat is the game's. `input_limiter.cpp` patches the executable's own import table for `GetKeyState` and `DirectInput8Create` (DllMain, and again
+from `Direct3DCreate9`); `DirectInput8Create` is wrapped so that `IDirectInput8::CreateDevice` (vtable slot 3) is hooked, and every device it creates gets
+`GetDeviceState` / `GetDeviceData` (slots 9 / 10 of `IDirectInputDevice8`) hooked, once per vtable (the A and W flavours have their own). Only a 256-byte
+`GetDeviceState` (the keyboard's format) is touched. The log (Log=1) names the path the game really uses: `input: the game polls the DirectInput keyboard
+(GetDeviceState)` and/or `input: the game polls GetKeyState(0x..)`; a keyboard read through `GetDeviceData` (buffered) is reported and **not** limited,
+and neither is raw input. If the limiter has no effect, those lines say why.
+
+**The pad** (added after a report that a controller still raced through the menus). Blur.exe imports `XINPUT1_3.dll` by *ordinal*, 2 and 3 (which on the real
+32-bit `xinput1_3.dll` are `XInputGetState` and `XInputSetState`), and the log of a real run shows that the only DirectInput devices it creates are keyboards, so
+the pad is read with `XInputGetState` once per frame and nothing else. `PatchXInput` finds the import-table entry by *address* (the one equal to
+`GetProcAddress(xinput, "XInputGetState")`, the table being bound by the time DllMain runs) and points it at `H_XInputGetState`. In the menus
+`LimitPadState` applies the same rule per controller: every defined bit of `wButtons` (D-pad, A B X Y, LB RB, Start, Back, the stick clicks) is a key, and the left
+stick is four more (a push beyond the 7849 dead zone is the direction held; while it is not shown the axis reads 0). The triggers and the right stick are
+left alone. `dwPacketNumber` is raised by a counter that grows whenever the picture the game is shown changes, so a game that skips an unchanged packet still
+sees every tap. Same menu gating as the keyboard (front end, or the pause overlay) and same reset on a scene change. Tested with `test_pad.exe` and a stand-in
+`xinput1_3.dll` that the program imports statically: in the menus a held D-pad, stick direction or A gives 21-23 presses in 1.8 s, in a race level 1, and no
+packet number ever went stale or backwards. **Confirmed with a real controller** (an Xbox-style pad, flat, Barcelona oval): the log shows `XInput pad hooked`, the pad polled as controller 0, the limiter
+on for the A and D-pad presses in the front end, and in the race Start (0x0010) pressed with the limiter off, the pause overlay up about 0.6 s later, and the next
+D-pad press logged as `limiter on, race menu up`; menu navigation with the pad and the keyboard then behaved as intended. `Log=1` writes `input: the game polls the XInput pad` and
+`input: pad button 0x.... pressed (limiter on/off, race menu up/not seen)`.
+
+**The rule** (`KeyRepeatShownDown`, a pure function of how long the key has been physically down, so any number of polls per frame agree): a press is a *tap*
+of half the interval (at least two frames, from the smoothed frame time, so that a poll cannot fall between taps); then nothing until 500 ms; then a tap
+every two taps (= the interval). The game therefore never sees the key held: its own repeat (`TimeHeld` > 1 s) never starts, and each tap is an ordinary
+press. Measured in `test_input.exe` (a real keyboard device, a key held with `SendInput`, 1.8 s): without the proxy the game sees 1 press, with it 23 (the
+first at once, the first repeat at about 520 ms, then every ~60 ms). The interval is stretched below 30 fps, where the game's own rate is already what
+it was designed for. Modifiers, locks and the mouse buttons are never filtered.
+
+**Menus only.** In a race the same arrow keys steer and a tap pattern would wreck that, so they pass untouched; the filters are reset whenever the
+scene changes. Two things count as a menu (`input_limiter.cpp`, `InputLimiterFrame` once per Present):
+* the front end (`InMenuScene()` in `game_mode.cpp`): no level opened yet, or the last level opened is `showroom`. The scene comes from the file-open
+  hooks, so it works flat as well as in VR; F8 / `StartMode` force it;
+* a pause or results menu on top of a race (`RaceMenuOverlay()` in `draw_dispatch.cpp`). **How it is recognised:** the menu dims the race with a
+  blended UI-shader fill that covers most of the screen (the VR path drops exactly those fills: the `known` pieces with a coverage of 0.6 and more). Flat
+  there is no scratch target, so the coverage is measured on the real draw: `RaceMenuMeasure` (constructed at the top of `RunDraw`) starts an
+  **occlusion query** around a draw that is a candidate, an alpha-blended draw by a UI shader (`g_Ui...`, no scene matrices) onto the back buffer while a level
+  other than the showroom is current, and `RaceMenuOverlayEndFrame` (from `InputLimiterFrame`) collects the finished queries without waiting
+  (`GetData(..., 0)`, a frame or two later): a draw that wrote at least 60 % of the back buffer's pixels is a covering fill. At most 48 queries are in flight, they
+  are released before a Reset. The overlay is **up** once a covering fill has been seen over at least 250 ms (first to last sighting, so a shorter screen
+  flash never counts) and **down** 150 ms after the last one. In VR the draws are redirected into the HUD layers, so a count on the real target would see
+  nothing, and the HUD path's own pause dim (`g_menuDimLast`) is used instead.
+  **The first version of this detector looked for a blended copy of the scene the size of the back buffer, and Blur's real pause menu does not draw one**
+  (the log of a real run: every blended draw to the back buffer in a race reads only the 960x540 and 480x270 glow / blur targets, the UI shaders have them
+  bound permanently); that is why the limiter did not engage in a pause menu. This version rests on what the VR code says about those menus, and **it worked in a real run** (flat, 1920x1080, Barcelona oval, `Log=1`): the detector went
+  up 250 ms after the pause menu appeared and down as soon as the player left to the front end, and the menu keys stopped racing. What the log recorded: the
+  pause fill is drawn by UI vertex shader 256 and wrote 100 % of the screen at first, then 65-75 % and falling to 25 % as the menu animated (the 60 % threshold
+  held for the part that matters); the Enter presses made while it was up were logged as `limiter on, race menu up`. **It is also up for the whole loading and
+  count-in stretch at the start of a race** (here from the level load at 22:16:56 to 22:17:10, about 14 s): the same covering fill is drawn there. That does not
+  matter while the car cannot be driven, but a key held down through the start (the accelerator) is shown to the game as taps until the fill is gone, which has
+  not been checked at the moment of GO. Also tested with synthetic draws (`test_overlay.exe`: the real proxy, a real device, real vertex shaders with hand-made
+  constant tables, F13 held with `SendInput`; the fill gives ~16 presses in 1.7 s, and none of the near misses (a small UI quad, no blending, a non-UI shader,
+  a 150 ms flash) switches it on). `Log=1` writes `race menu: up` / `race menu: gone`, `race menu probe:` lines (one per UI vertex shader and
+  coverage tenth, from 20 % up: how much of the screen each blended UI draw writes), and `input: key 0x.. pressed (limiter on/off, race menu up/not seen)`
+  for Escape (0x01), Enter (0x1C) and Backspace (0x0E), so a log shows whether the detector followed the menu.
+  **A way out:** flat, the mode key (F8, `[General] ModeKey`) cycles `g_modeOverride` (auto -> forced on -> forced off) for the limiter, as it does for the
+  VR mode detection; `InMenuScene()` honours it.
