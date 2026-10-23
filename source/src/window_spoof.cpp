@@ -216,7 +216,7 @@ static void PatchWindowImports(HMODULE mod)
 
 void InstallWindowSizeSpoof(bool allModules)
 {
-    if (!g_cfg.enabled || !g_cfg.startAtSavedSize || g_deviceCreated)
+    if (!g_cfg.vr || !g_cfg.startAtSavedSize || g_deviceCreated)
         return;
     static bool prepared = false;
     if (!prepared) {

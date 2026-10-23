@@ -7,6 +7,7 @@
 #include "display_modes.h"
 #include "game_mode.h"
 #include "perf_probe.h"
+#include "video_settings.h"
 #include "window_spoof.h"
 
 // ----------------------------------------------------------------------------------------------
@@ -27,7 +28,7 @@ IDirect3D9* WINAPI Direct3DCreate9(UINT sdk)
         InstallFileOpenHooks();
     }
     IDirect3D9* d3d = NULL;
-    if (g_cfg.enabled && g_cfg.sharedTransport) {
+    if (g_cfg.vr && g_cfg.sharedTransport) {
         // SharedTransport: the game gets an IDirect3D9Ex (same vtable layout for everything it calls) so that its device can be
         // an IDirect3DDevice9Ex, the only kind that can share textures with Direct3D 11 (see display_modes.cpp)
         PFN_Create9Ex create9Ex = g_realD3D9Module ? (PFN_Create9Ex)GetProcAddress(g_realD3D9Module, "Direct3DCreate9Ex") : NULL;
@@ -109,8 +110,10 @@ DWORD WINAPI D3DPERF_GetStatus(void)
 
 } // extern "C"
 
-BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID)
+BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved)
 {
+    if (reason == DLL_PROCESS_DETACH && reserved) // the process is exiting (not just this DLL being unloaded)
+        VideoSettingsEnd();
     if (reason == DLL_PROCESS_ATTACH) {
         g_selfModule = (HMODULE)h;
         DisableThreadLibraryCalls(h);
@@ -138,6 +141,11 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID)
             }
         }
         Log("BlurVR %s proxy loaded. root=%s", BLURVR_VERSION, g_gameDir);
+        if (!g_cfg.enabled)
+            Log("Enabled=0 in the ini: the mod does nothing and the game runs as it would without it");
+        else if (!g_cfg.stereo)
+            Log("Stereo=0 in the ini: flat mode, SteamVR is not started and only the [Display] settings apply");
+        VideoSettingsStart();          // the game's saved display mode, before the game reads it
         InstallWindowSizeSpoof(false); // the executable's imports, before the game looks at its window
     }
     return TRUE;

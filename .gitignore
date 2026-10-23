@@ -5,3 +5,4 @@ previous_build/
 d3d9.dll
 dist/
 image_dump/
+display_backup.ini

@@ -22,19 +22,20 @@ Install
      e.g.  ...\steamapps\common\Blur\BlurVR\
   2. Run BlurVR\install.bat (copies d3d9.dll next to Blur.exe). uninstall.bat removes it again.
   3. Start SteamVR, then launch Blur from Steam.
-  4. In the game's video options (Options > Graphics > Resolution) choose the extra resolution BlurVR adds.
-     It is 2160x1200 until you change CustomWidth / CustomHeight in BlurVR.ini (see Resolution below).
-     The game starts at the size you chose from then on. V-Sync is turned off by BlurVR itself, the headset sets the frame rate.
+  4. In the game's video options (Options > Graphics > Resolution) choose the size for your headset (see Resolution below).
+     It is 2160x1200 until you change Resolution under [VR] in BlurVR.ini, or pick another size in the options.
+     The game starts at that size from then on. V-Sync is turned off by BlurVR itself, the headset sets the frame rate.
 
 Resolution
   In races the picture is rendered side by side (left eye | right eye), so each eye gets HALF the width.
-    1920x1080 = 960x1080 per eye       (light, soft)
+    1920x1080 = 960x1080 per eye       (light, soft; not in the list, but you can write it as Resolution=1920x1080)
     2160x1200 = 1080x1200 per eye      (BlurVR's default; the Vive's panel size)
-    3840x2160 = 1920x2160 per eye      (sharp, heavy)
+    3840x2160 = 1920x2160 per eye      (sharp, heavy; not in the list either, Resolution=3840x2160 works)
     4936x2740 = 2468x2740 per eye      (what SteamVR itself renders for a Valve Index; needs a strong graphics card)
-  BlurVR adds one entry to the game's resolution list: CustomWidth x CustomHeight in BlurVR.ini.
-  Recommended sizes (the headset's panel size per eye x 1.4 on each side, SteamVR's default supersampling), both eyes side by side:
-    HTC Vive, Oculus Rift CV1 (1080x1200 per eye) ........ 3024x1680
+  In VR BlurVR replaces the game's resolution list (the monitor's 16:9 and 4:3 modes mean nothing in a headset) with these sizes: the
+  headset's panel size per eye x 1.4 on each side (SteamVR's default supersampling), both eyes side by side. The Resolution in BlurVR.ini
+  ([VR] section) is always in the list too, whatever it is. Flat (Stereo=0) the game's own list is untouched.
+    HTC Vive, Oculus Rift CV1 (1080x1200 per eye) ........ 3024x1680   (2160x1200 = the panel's own size: the default, light)
     Oculus Rift S (1280x1440) ............................ 3584x2016
     Valve Index, Vive Pro, Meta Quest 1 (1440x1600) ...... 4032x2240   (4936x2740 = SteamVR's own size for the Index)
     Meta Quest Pro (1800x1920) ........................... 5040x2688
@@ -42,10 +43,13 @@ Resolution
     Meta Quest 3 (2064x2208) ............................. 5780x3092
     Valve Steam Frame, HP Reverb G2, Pico 4 (2160x2160) .. 6048x3024
     HTC Vive Pro 2, Vive Focus 3 (2448x2448) ............. 6856x3428
+    Bigscreen Beyond (2560x2560) ......................... 7168x3584
   Your monitor has no such mode, so the game runs in a window (a window larger than your screens is normal);
   only the headset sees the picture. Bigger is sharper but heavier: start with the Vive-sized entry and go up while it stays smooth.
-  BlurVR keeps the game's start-up size even when Windows cannot make a window that big (StartWidth / StartHeight in BlurVR.ini
-  force a size if you ever need to; 0 = the size you chose in the game's options).
+  In VR the size is kept in BlurVR.ini ([VR] Resolution=WxH): the game starts at it, even when Windows cannot make a window that big, and a
+  size you pick in the game's video options is written there. The game's own settings (settings.xml) keep the size of the flat game, so with
+  Stereo=0 or Enabled=0 it starts at your normal resolution again. BlurVR puts the flat size back when the game exits (and at the next start
+  if the game was killed); the untouched file is copied to settings.xml.blurvr-backup beside it, and BlurVR\display_backup.ini holds the flat size.
 
 Keys
   F9  recenter (sit comfortably, look straight ahead, press F9). This is SteamVR's own recentre, so recentering in SteamVR does the same.
@@ -57,12 +61,20 @@ Keys
   Num8 save what the headset sees as picture files (see Troubleshooting)
   Num9 vertical field of view: fixed / as in 1.1 (for comparing; see OldVerticalTangents)
 
-Settings: BlurVR.ini holds only the options most people need (resolution, start size, shared-texture transport).
+Settings: BlurVR.ini holds only the options most people need (the mode, resolution, start size).
   Every option is listed below; add a line under its [section] in BlurVR.ini to use it (keys left out use the default shown).
   Edit with the game closed. Delete BlurVR.ini to go back to all defaults.
+  The mod has three states: Enabled=0 does nothing at all; Enabled=1 with Stereo=1 is VR; Enabled=1 with Stereo=0 is "flat": the
+  game stays on the monitor, SteamVR is never started and only the [Display] settings apply. The [VR] and [Render] settings are
+  ignored when flat (the extra resolution is not offered either), so the game starts at the size it saved.
+  Settings that moved are read from their new place only: an older BlurVR.ini keeps working for Stereo, ForceNoVSync, SharedTransport,
+  DesktopView, DesktopPresentEvery, FitDesktopWindow (still read from [Render]) and for CustomWidth / CustomHeight (read as Resolution),
+  but UiGlow, NoBloom, LoadingGlow, MaxFps, StartWidth, StartHeight and StartAtSavedSize are gone, and NoLensFlare is only read from [VR].
+  Bloom replaces UiGlow, LoadingGlow and NoBloom (Bloom=0 is "no glow anywhere"). ForceNoVSync=0 follows the display's refresh rate.
 
 [General]
-  Enabled=1          0 = the mod does nothing (the game runs flat)
+  Enabled=1          master switch. 0 = the mod does nothing at all (the game runs as if it were not installed)
+  Stereo=1           1 = VR. 0 = flat: no SteamVR and no VR changes to the game; only the [Display] settings apply
   Log=0              1 = write BlurVR\BlurVR.log (for bug reports; the log of the previous run is kept as BlurVR.previous.log)
   RecenterKey=0x78   virtual-key codes (hex): F9 recenter
   ToggleKey=0x79     F10 head tracking on/off
@@ -80,29 +92,32 @@ Settings: BlurVR.ini holds only the options most people need (resolution, start 
   OldVerticalTangents=0  1 = read the headset's upward and downward field of view swapped, as 1.1 did (squashed periphery on headsets
                      that see further down than up, such as the Quest 2)
 
-[Render]
-  CustomWidth=2160  CustomHeight=1200   the extra resolution offered in the game's options (0 = off)
-  StartWidth=0  StartHeight=0           the size the game starts at (0 = the size saved by the game)
-  StartAtSavedSize=1    1 = a window that Windows made smaller than the chosen size does not shrink the game's picture
-  SharedTransport=0     1 = run the game on a Direct3D 9Ex device and hand each finished race frame to SteamVR on the GPU
-                        instead of copying it through the CPU (saves several ms a frame, most at large sizes). Set 0 if anything
-                        looks wrong. The ini shipped with the mod sets it to 1.
-  DesktopView=1         what the window on the desktop shows in a race: 1 = the left eye's view (cropped to the window's shape and
-                        drawn at the window's own size, which is cheap), 2 = the right eye's, 0 = the whole side-by-side picture.
+[Display]       (VR and flat)
+  ForceNoVSync=0        1 = V-Sync off: the game runs as fast as it can. 0 = the game's own V-Sync setting (with V-Sync on the frame
+                        rate follows the monitor, e.g. 60). In VR this key is ignored: V-Sync is always off there and the headset's
+                        own refresh rate (90, 120, 144 ...) sets the frame rate
+
+[VR]            (ignored when Stereo=0)
+  Resolution=2160x1200  the size of the VR picture, both eyes side by side (see Resolution above). It is the extra entry in the
+                        game's resolution list and the size the game starts at. Pick another size in the game's video options and
+                        BlurVR writes it here for you. The game's own settings keep the flat game's size.
+  Bloom=100             strength of the game's glow around its menus, UI and loading screens, in percent (0 = none, 200 = double)
+  NoLensFlare=0         1 = drop the flare sprites and the glow around lights
+  SharedTransport=1     run the game on a Direct3D 9Ex device and hand each finished race frame to SteamVR on the GPU
+                        instead of copying it through the CPU (saves several ms a frame, most at large sizes). On by default; it
+                        falls back to the CPU copy by itself when it cannot work. Set 0 if textures look wrong or the picture is black
+  DesktopView=left      what the window on the desktop shows in a race: left = the left eye's view (cropped to the window's shape and
+                        drawn at the window's own size, which is cheap), right = the right eye's, both = the whole side-by-side picture.
                         The headset's picture is not affected.
   DesktopPresentEvery=1 in a race, the window on the desktop (a mirror of the headset) really updates only every n-th frame
                         (2-4 saves a little GPU time; 1 = every frame)
   FitDesktopWindow=1    1 = the game's window is never made bigger than the work area of its monitor (at a 3840x2160 setting it
                         would cover the whole desktop, or two monitors). The game still renders at the size it chose; the window
                         shows one eye's view of it scaled to fit (DesktopView). Windowed mode only. 0 = as the game wants.
-  ForceNoVSync=1        1 = turn the game's V-Sync off, the headset sets the frame rate (if the game runs at the wrong speed,
-                        set 0 and turn V-Sync off in the game's video options)
-  MaxFps=0              frame rate cap (0 = none). 60 avoids audio stutter some get at high frame rates
-  Stereo=1              0 = one centre picture for both eyes
+
+[Render]        (VR only)
   FovScale=1.0          <1 zooms in, >1 zooms out
   SeamGutter=0          black pixels at the inner edge of each eye (stops glow bleeding across the seam)
-  NoLensFlare=0         1 = drop the flare sprites and the glow around lights
-  NoBloom=0             1 = no glow around menus, loading screens and the HUD
   Advanced (leave alone unless told to): MainPassMinWidthFraction=0.9, RequireDepthBuffer=1, HalfResPasses=1,
   ReflectionLookupFix=1, ReflectionFlip=-1
 
@@ -114,8 +129,6 @@ Settings: BlurVR.ini holds only the options most people need (resolution, start 
   XOffset=0.0       extra convergence per eye, as a fraction of one eye's width
   VeilRace=120 VeilResults=36 VeilMenu=100   how dark the veil behind popups is (0-255)
   DimStrongPct=60   how dark the scene gets behind pause/results menus (0-100)
-  UiGlow=100        strength of the glow around UI elements (%)
-  LoadingGlow=1     keep the game's glow on the loading screen
   DropBackdrop=1    drop the game's full-screen dim/blur copies (they would blank the HUD layer)
   HideFullscreenOverlay=1  hide the HUD layer while a full-screen video plays
   CountInDrop=1     hide the race-start letterbox pieces (0 = draw them into the HUD)
@@ -171,9 +184,10 @@ Troubleshooting
   Something looks wrong in the headset: press Num8 while it is on screen. BlurVR saves BlurVR_dump_<time>_picture_*.bmp
   (the whole side-by-side picture, large files) and one file per HUD layer in the BlurVR folder: attach them to the report.
   A bug report should also include BlurVR.log: set Log=1 under [General], reproduce the problem, close the game, and send BlurVR\BlurVR.log.
-  Slow: lower CustomWidth/CustomHeight, or make sure SharedTransport=1. Num7 (or Enabled=1 under [Perf], with Log=1) writes timing lines to the log.
-  If SharedTransport=1 gives odd textures or a black picture on your graphics card, set SharedTransport=0.
-  To run the game flat, run uninstall.bat (or set Enabled=0 in BlurVR.ini).
+  Slow: lower Resolution under [VR]. Num7 (or Enabled=1 under [Perf], with Log=1) writes timing lines to the log.
+  If SharedTransport (on by default in VR) gives odd textures or a black picture on your graphics card, add SharedTransport=0 under [VR].
+  To run the game flat, set Stereo=0 (SteamVR is not used; the [Display] settings still apply), or Enabled=0 (the mod does nothing),
+  or run uninstall.bat.
 
 What is new in 1.3
   * BlurVR should now work with any version of Blur, not only the Steam one. The head-following view frustum of 1.2 was tied to the
@@ -205,5 +219,5 @@ What is new in 1.1
   * Lower CPU cost per frame: fewer Direct3D calls around every duplicated draw, and the HUD no longer waits for the graphics card.
   * The window on the desktop shows one eye's view instead of the squashed side-by-side picture (DesktopView), and is kept within
     the monitor's work area however high the resolution is (FitDesktopWindow).
-  * Photo viewer in the menus shows the photos in 3D; V-Sync is switched off by the mod (ForceNoVSync, MaxFps).
+  * Photo viewer in the menus shows the photos in 3D; V-Sync is switched off by the mod in VR.
   * Diagnostics are opt-in: logging is off unless Log=1; Num7 (timing) and Num8 (picture files) are there for bug reports.

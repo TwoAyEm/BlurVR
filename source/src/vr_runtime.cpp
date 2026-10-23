@@ -293,8 +293,8 @@ bool VrInit()
     if (g_vr.tried)
         return g_vr.active;
     g_vr.tried = true;
-    if (!g_cfg.enabled) {
-        Log("Disabled in ini");
+    if (!g_cfg.vr) {
+        Log(g_cfg.enabled ? "Stereo=0 in ini: flat mode, SteamVR is not used" : "Disabled in ini");
         return false;
     }
 

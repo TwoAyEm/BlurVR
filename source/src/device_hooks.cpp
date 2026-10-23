@@ -6,7 +6,6 @@
 #include "device_state.h"
 #include "display_modes.h"
 #include "draw_dispatch.h"
-#include "frame_limiter.h"
 #include "game_camera.h"
 #include "game_mode.h"
 #include "hud.h"
@@ -70,8 +69,6 @@ static HRESULT STDMETHODCALLTYPE H_Present(IDirect3DDevice9* d, const RECT* a, c
         // an Ex device reports a covered or resized window with success codes a plain device never returns
         if (g_deviceIsEx && (hr == 0x08760878 /*S_PRESENT_OCCLUDED*/ || hr == 0x08760877 /*S_PRESENT_MODE_CHANGED*/))
             hr = D3D_OK;
-        // MaxFps: wait here, after the frame is out and before the next pose is asked for, so the wait does not make the pose older
-        LimitFrameRate(g_cfg.enabled ? g_cfg.maxFps : 0);
     }
     if (g_vr.active) {
         PerfScope perfPose(PS_POSE);
@@ -94,7 +91,7 @@ static HRESULT STDMETHODCALLTYPE H_Reset(IDirect3DDevice9* d, D3DPRESENT_PARAMET
     ReleaseMirrorStereo();
     ReleasePhotoStereo();
     g_renderTargetTextures.clear();
-    AdjustPresentParams(pp);
+    AdjustPresentParams(pp, true);
     if (pp)
         WindowSpoofWindowed(pp->Windowed != 0);
     if (pp && pp->Windowed)

@@ -193,17 +193,20 @@ where. They are the most fragile part of the mod; they were tuned in the headset
 * HUD draws that sample a blurred scene RT work because the panel is composed late; only the final full-screen composite
   is excluded.
 
-**UI glow / bloom** (`[Render] NoBloom`, `[Hud] UiGlow`). The game draws its 2D elements a second time into a small
+**UI glow / bloom** (`[VR] Bloom`, one value for all of it). The game draws its 2D elements a second time into a small
 render target (540x267, or the full-size UI target in the showroom menus), blurs that into a ~135x66 glow texture and
 adds it over the finished picture in its last pass. That pass is mono and would smear across both eyes, so it is
 intercepted instead: the glow texture is noted (`NoteSceneBloom`, one frame only) and its draw skipped, and
-`ComposeHudLayers` adds it (`addGameGlow`, ONE/ONE, strength `UiGlow`) over the world-locked layer quads, which follow
+`ComposeHudLayers` adds it (`addGameGlow`, ONE/ONE, strength `Bloom`) over the world-locked layer quads, which follow
 the UI in each eye. Identification is structural (render-target sizes, additive blend onto the back buffer), never by
 shader id (ids differ between runs). Showroom menus: the UI draws are also run into the game's own UI target
 ("shadow" draw) so its glow chain has something to blur, and its final pass is skipped. In the race the glow-buffer
 UI draws are kept (`g_menuGlowFrame`), except those that sample a render target (mirror picture, scene), so only the
-2D elements glow. Flat loading screens simply let the game's glow pass run. `NoBloom=1`
-disables all of it (the UI draws into the glow buffers are then skipped, as they would smear across both eyes).
+2D elements glow. `Bloom=0` disables all of it (the UI draws into the glow buffers are then skipped, as they would smear across both eyes).
+The loading screen's glow is the same value: it is a small blurred copy of the picture added over the whole screen (ONE/ONE), recognised by
+its blend state and a render target under a quarter of the back buffer, and `DrawGlowAtStrength` (`draw_dispatch.cpp`) draws it at `Bloom` percent:
+the blend factor (`D3DBLEND_BLENDFACTOR`) scales what is added up to 100 %, a second draw adds the part above that (200 % = twice), 0 skips it.
+Flat, nothing of this runs (`Bloom` is forced to 100 and the game's glow pass is left alone).
 
 **UI clipping with the stencil buffer** (always on). The game clips its UI with stencil, not scissor or viewport (the
 log shows scissor off and the full viewport on every UI draw): a *mask draw* (`STENCILFUNC=ALWAYS`, `STENCILPASS=REPLACE`,
@@ -276,26 +279,49 @@ Known: popups still look slightly dim (`Veil*` settings); root cause never found
 a Vive is 1512x1680 per eye); the SBS target at 3840x2160 is 1920x2160 per eye, which also smooths shimmer. 1920x1080
 gives only 960x1080 per eye.
 
-**Custom resolution** (`CustomWidth/CustomHeight`, default 2160x1200). The game lists the adapter's display modes; the mod
-wraps `GetAdapterModeCount` / `EnumAdapterModes` (IDirect3D9 vtable slots 6 / 7) to add one more entry
-(per refresh rate already present, kept sorted). A size the monitor does not have cannot be full-screen, so
-`CreateDevice` / `Reset` (`AdjustPresentParams`) turn such a request into a **windowed** back buffer; only the headset
-sees the picture. Slot 16 is `CreateDevice`.
+**Resolution list** (`[VR] Resolution`, default 2160x1200; `kHeadsetSizes` in `display_modes.cpp`). The game lists the adapter's display modes; the mod
+wraps `GetAdapterModeCount` / `EnumAdapterModes` (IDirect3D9 vtable slots 6 / 7). In VR it hides the monitor's modes (16:9, 4:3: they mean nothing for a
+picture that is two eyes side by side) and offers the headset sizes of the README table instead (panel per eye x 1.4 each way, both eyes together: Vive
+3024x1680 ... Bigscreen Beyond 7168x3584, plus the Vive panel size 2160x1200 and the Index's SteamVR size 4936x2740), once per refresh rate the monitor
+has (the game lists a size per rate), ascending. The current `Resolution` is always added when it is not in the table, so a custom size never vanishes and
+the size the game starts at is always in its list. Flat the wrappers pass the monitor's own list through. None of the offered sizes is a monitor mode, and
+a full-screen device needs one, so `AdjustPresentParams` makes any full-screen request for a size the monitor has no mode of (`MonitorHasMode`, the original
+enumeration) a windowed back buffer; only the headset sees the picture.
 
-**V-Sync** (`[Render] ForceNoVSync`, default 1). The game saves `vsync="1"` in its settings and presents with a V-Sync wait, which held it at the monitor's 60 Hz (the watchdog lines in the log counted 60 presents per second) whatever the headset's refresh rate, so SteamVR had to reproject every frame. `AdjustPresentParams` (`CreateDevice` and `Reset`) now sets `D3DPRESENT_INTERVAL_IMMEDIATE`; `WaitGetPoses` right after `Present` is what paces the game to the headset. It does nothing when `Enabled=0`. If a game version ties its simulation speed to the frame rate, set 0 and turn V-Sync off in the game's video options (or leave it on).
+**Where the size lives** (`video_settings.cpp`).  In VR the game's picture size is the VR size and belongs in BlurVR.ini (`[VR] Resolution`); the game's own
+settings.xml keeps the flat game's mode, so Stereo=0 / Enabled=0 starts at the old resolution again.  The game keeps its mode in five attributes of the
+`<shared_graphical_settings>` element (`width`, `height`, `windowed`, `x`, `y`) and reads them right after the proxy is loaded, so `DllMain` runs
+`VideoSettingsStart` first: it copies the five values to `BlurVR\display_backup.ini` (`[Flat]`, `[Session] Open=1`), copies the whole file to
+`settings.xml.blurvr-backup` beside it, and seeds the element with the VR size and `windowed="1"` (the extra mode is not a monitor mode, so it can only be a
+window; this is the state the old runs reached by themselves once the size had been picked).  `VideoSettingsEnd`, called from `DLL_PROCESS_DETACH` of an exiting
+process, puts the five values back whatever the game wrote meanwhile (other attributes such as `vsync` stay as the game wrote them) and sets `Open=0`.  A
+start that finds `Open=1` (the game was killed, no detach) restores the flat values first, in flat mode as well as in VR, and in VR keeps the flat values from
+the sidecar instead of copying the seeded ones.  Files are read and written as bytes (BOM, CRLF and everything outside the five values are untouched), the
+write goes to a temporary file that is moved over the original, and nothing is touched when the element or the file is missing.  A size the game switches to
+on a running device (`AdjustPresentParams(pp, true)` from `H_Reset`) is `VideoSettingsNoteMode`d when it is one of the modes the mod offered the game (a size
+asked for for another reason, a dragged window say, is not in that list): `WritePrivateProfileString` stores it as `[VR] Resolution` (the other lines of
+the ini, comments included, are kept).  The first `CreateDevice` is never taken as a pick.
 
-**Frame cap** (`[Render] MaxFps`, default 0 = none; `frame_limiter.cpp`). Some people hear audio stutter at high frame rates, so the game can be held to a rate, for example 60. `LimitFrameRate` runs in `H_Present` after `Present` and before `VrUpdatePose` (`WaitGetPoses`), so the wait does not make the next frame's pose older. It keeps a steady slot cadence (a late frame is not made up for) and waits on a high-resolution timer, spinning the last 2 ms. Measured on its own at 60 / 30 fps: 60.0 / 30.0 fps. A cap below the headset's refresh rate makes SteamVR reproject the frames in between.
+**V-Sync** (`[Display] ForceNoVSync`, default 0). The game saves `vsync="1"` in its settings and presents with a V-Sync wait, which held it at the monitor's 60 Hz (the watchdog lines in the log counted 60 presents per second) whatever the headset's refresh rate, so SteamVR had to reproject every frame. In VR, `AdjustPresentParams` (`CreateDevice` and `Reset`) therefore always sets `D3DPRESENT_INTERVAL_IMMEDIATE`, whatever the key says: `WaitGetPoses` right after `Present` is what paces the game to the headset (so 90 / 120 / 144 Hz follow the headset, never the monitor). Flat (`Stereo=0`), `ForceNoVSync=1` turns V-Sync off (unlimited frame rate) and 0 leaves the game's own setting (V-Sync on = the monitor's refresh rate). It does nothing when `Enabled=0`. There is no frame cap any more (`MaxFps` and `frame_limiter.cpp` were removed): V-Sync on is the way to hold a rate, and in VR the headset is.
 
 ## 9. Settings reference (BlurVR.ini)
 
-`[General]` Enabled, Log (0), AutoRecenter (1), RecenterKey (0x78 F9), ToggleKey (0x79 F10), ModeKey (0x77 F8), StartMode (0 auto /
+The mod has three states. `Enabled` (1) is the master switch: 0 = the mod does nothing. `Stereo` (1, `[General]`) picks the half: 1 = VR, 0 = flat
+(SteamVR, the size override, the D3D9Ex device, the extra video mode, the head-frustum hook and every `[VR]` / `[Render]` setting are off; only `[Display]`
+applies).  `LoadConfig` computes `g_cfg.vr = enabled && stereo`; VR-only code asks `g_cfg.vr`, not `g_cfg.enabled`, and the `[VR]` values that act without
+looking at `g_cfg.vr` (Bloom, NoLensFlare, the sizes) are forced to "as the game draws it" when flat.  A key that moved is still read from its old section
+where `ReadIniInt(..., oldSection)` says so: Stereo, ForceNoVSync, SharedTransport, DesktopView, DesktopPresentEvery, FitDesktopWindow from `[Render]`.
+`[General]` Enabled, Stereo, Log (0), AutoRecenter (1), RecenterKey (0x78 F9), ToggleKey (0x79 F10), ModeKey (0x77 F8), StartMode (0 auto /
 1 floating screen / 2 race), ThreadedInit, DeferVR.
+`[Display]` (VR and flat) ForceNoVSync (0; in VR V-Sync is always off, the headset paces the game).
+`[VR]` (ignored when flat) Resolution (WxH, 2160x1200; `CustomWidth`/`CustomHeight` of `[Render]` are read when it is missing), Bloom (100 %: the game's glow around
+menus, UI and loading screens; 0 = none), NoLensFlare (0; 1 drops the flare sprites and the bloom/glow around lights), SharedTransport (1, section 15),
+DesktopView (left / right / both; 1 / 2 / 0 still read), DesktopPresentEvery (1, section 18), FitDesktopWindow (1).
 `[Tracking]` Rotation, Position, PositionScale (game units per metre), IpdScale.
-`[Render]` CustomWidth/CustomHeight (2160/1200), ForceNoVSync (1), MaxFps (0), Stereo, FovScale, SeamGutter (0), NoLensFlare (0; 1 drops the flare sprites and the
-bloom/glow around lights), NoBloom (1 = no glow around 2D UI: menus, loading screens, HUD, pause, car selector); undocumented tuning: MainPassMinWidthFraction (0.9),
-RequireDepthBuffer, HalfResPasses, ReflectionLookupFix, ReflectionFlip; SharedTransport (section 15), StartAtSavedSize (1), StartWidth/StartHeight (0, section 16), `[Hud]` CoverageEvery (8, section 18); `[Render]` DesktopPresentEvery (1, section 18).
+`[Render]` (VR only) FovScale, SeamGutter (0); undocumented tuning: MainPassMinWidthFraction (0.9), RequireDepthBuffer, HalfResPasses, ReflectionLookupFix,
+ReflectionFlip; `[Hud]` CoverageEvery (8, section 18).
 `[Hud]` WorldLocked, Scale (0.6, fraction of one eye's width), Distance, OffsetY, XOffset, Mirror3D (1),
-MirrorConvergence (1.5), MirrorEyeScale (1), MirrorHeadParallax (1), UiGlow (strength %, 100),
+MirrorConvergence (1.5), MirrorEyeScale (1), MirrorHeadParallax (1),
 VeilRace, VeilResults, VeilMenu, DimStrongPct, CountInDrop (1), DropBackdrop, HideFullscreenOverlay.
 `[Menu]` Distance, Width, HeightOffset.
 `[Matrix]` Layout (`auto`|`row`|`transposed`).
@@ -391,7 +417,7 @@ callback type; each module header lists what the module exports (with one-line c
 | `game_signatures` | Finds the game's two camera hand-over functions in the code of any build by wildcarded byte patterns (section 25); pure code, also used by `tools/camera_sig_check.py`. | `InitGameCameraScan`, `ScanForGameCameraCode`, `ResolveGameCameraCode` |
 | `game_camera` | Hooks on the game's camera hand-over to its views (section 25): the game culls with a frustum around the head (`[Culling] HeadFrustum`), once the main camera is recognised and the frustum layout checked. | `GameCameraPoll` |
 | `window_spoof` | Section 16: answers the game's window-size queries (GetClientRect, WM_SIZE) with the size it asked for when Windows clamped the window to the desktop. | `InstallWindowSizeSpoof`, `WindowSpoofIntendedSize`, `ReadSavedVideoSize` |
-| `frame_limiter` | Frame rate cap (`MaxFps`): waits after Present so the game does not run faster than the cap. | `LimitFrameRate` |
+| `video_settings` | Where the display mode lives: BlurVR.ini `[VR] Resolution` in VR, settings.xml (restored at exit) for the flat game. | `VideoSettingsStart`, `VideoSettingsEnd`, `VideoSettingsNoteMode` |
 | `display_modes` | Extra display mode for the game's resolution list, and the IDirect3D9 hooks. | `BuildModeList`, `H_GetAdapterModeCount`, `H_EnumAdapterModes`, `AdjustPresentParams`, `H_CreateDevice`, `HookDirect3D` |
 | `dllmain` | d3d9.dll exports (forwarded to the real d3d9.dll) and DllMain. | `Direct3DCreate9`, `Direct3DCreate9Ex`, `RealProc`, `D3DPERF_BeginEvent`, `D3DPERF_EndEvent`, `D3DPERF_SetMarker`, `D3DPERF_SetRegion`, `D3DPERF_QueryRepeatFrame`, `D3DPERF_SetOptions`, `D3DPERF_GetStatus`, `DllMain` |
 
@@ -545,7 +571,7 @@ entirely about 4.5 shader-less draws per frame ("ps -1 vs -1", 5.65 ms): fixed-f
 1.25 ms each on this GPU, so the time is the CPU gap that follows them, i.e. the GPU timeline is paced by the CPU and its phase
 times say little about GPU load. To measure real GPU busy time, bracket single draws with a stamp before and after.
 
-## 15. Shared-texture transport (`[Render] SharedTransport`, off by default)
+## 15. Shared-texture transport (`[VR] SharedTransport`, on by default in VR)
 
 **Why.** The frame goes to SteamVR through the CPU: `StretchRect`, `GetRenderTargetData`, a lock that waits for the GPU, a copy into a
 Direct3D 11 texture. Measured in game it costs about 2.8 ms of CPU wait plus 3.3 ms of GPU copy at 2160x1071, and it grows with the
@@ -656,6 +682,11 @@ reprojection). What would lower the GPU side now: fewer shaded pixels (the 25 pe
 lower density), and trimming the fixed per-frame GPU work (shadow maps 1.7 ms, the double geometry pass).
 
 ## 16. A back buffer wider than 3:1 (the game window clamped to a two-monitor desktop)
+
+> **Since the Resolution rework** `StartAtSavedSize`, `StartWidth` and `StartHeight` are no longer keys.  VR always uses the start spoof described
+> here, and the size it starts at is `[VR] Resolution` (the same size that is offered as the extra video mode).  `video_settings.cpp` keeps
+> that size in BlurVR.ini and the flat game's size in settings.xml (see the end of section 5, "Custom resolution"); the text below is the history
+> of how the clamped-window problem was found.
 
 The game saves its video mode in `%APPDATA%\bizarre creations\blur\settings.xml` (`<shared_graphical_settings width= height= windowed=>`) and,
 windowed, asks Windows for a window of that size.  Windows clamps a window to the virtual desktop, and the game then creates its device at the

@@ -403,7 +403,7 @@ void GameCameraPoll()
                 g_counters.dataCalls, g_counters.dataValid, g_counters.dataMain, g_counters.cameraCalls, g_counters.rewrites, g_counters.layoutFailures);
         return;
     }
-    if (!g_cfg.cullHeadFrustum || !g_cfg.enabled || tries >= 5 || frame < nextTry)
+    if (!g_cfg.cullHeadFrustum || !g_cfg.vr || tries >= 5 || frame < nextTry)
         return;
     tries++;
     nextTry = frame + 120; // (a build that unpacks its code late is looked at again a little later)

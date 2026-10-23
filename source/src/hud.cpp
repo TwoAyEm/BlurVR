@@ -1002,8 +1002,8 @@ void ComposeHudLayers(IDirect3DDevice9* device)
         if (topContent)
             drawHudQuads();
     }
-    if (g_cfg.uiGlowPct > 0 && g_sceneBloom && (hudContent || topContent))
-        addGameGlow(g_cfg.uiGlowPct);
+    if (g_cfg.bloomPct > 0 && g_sceneBloom && (hudContent || topContent))
+        addGameGlow(g_cfg.bloomPct);
     g_hudStateBlock->Apply();
     setRenderTarget(device, 0, savedTarget ? savedTarget : backBuffer);
     setViewport(device, &g_gameViewport);

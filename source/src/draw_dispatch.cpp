@@ -223,14 +223,45 @@ static int ClassifyDraw(IDirect3DDevice9* device)
 // these keep arriving (they stop the moment the player skips the lead-in)
 static unsigned long long g_lastIntroPieceTime = 0;
 
+// One of the game's own glow draws (additive, ONE / ONE) at pct % of its strength.  The blend factor scales what is added, up to
+// 100 %; above that the draw is repeated for the rest.  0 drops it.
+static HRESULT DrawGlowAtStrength(IDirect3DDevice9* device, const DrawCall& draw, int pct)
+{
+    if (pct <= 0)
+        return D3D_OK;
+    static int blendFactorSupported = -1;
+    if (blendFactorSupported < 0) {
+        D3DCAPS9 caps;
+        blendFactorSupported = SUCCEEDED(device->GetDeviceCaps(&caps)) && (caps.SrcBlendCaps & D3DPBLENDCAPS_BLENDFACTOR) ? 1 : 0;
+    }
+    if (!blendFactorSupported) // (practically every card has it) no way to scale: the nearer of "as drawn" and "none"
+        return pct >= 50 ? draw() : D3D_OK;
+    if (pct > 200)
+        pct = 200;
+    PFN_SetRenderState setRenderState = (PFN_SetRenderState)g_deviceOriginals[VT_SetRenderState];
+    DWORD savedFactor = 0;
+    device->GetRenderState(D3DRS_BLENDFACTOR, &savedFactor);
+    setRenderState(device, D3DRS_SRCBLEND, D3DBLEND_BLENDFACTOR);
+    HRESULT hr = D3D_OK;
+    for (int left = pct; left > 0; left -= 100) {
+        DWORD level = (DWORD)((left > 100 ? 100 : left) * 255 / 100);
+        setRenderState(device, D3DRS_BLENDFACTOR, D3DCOLOR_ARGB(255, level, level, level));
+        hr = draw();
+    }
+    setRenderState(device, D3DRS_BLENDFACTOR, savedFactor);
+    setRenderState(device, D3DRS_SRCBLEND, D3DBLEND_ONE);
+    return hr;
+}
+
 HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
 {
     PerfDrawScope perf(device);
-    if (!g_cfg.loadingGlow && g_levelLoading && g_levelFilesSeen && !IsRaceMode() && g_renderTarget0 &&
+    if (g_cfg.bloomPct != 100 && g_levelLoading && g_levelFilesSeen && !IsRaceMode() && g_renderTarget0 &&
         g_renderTarget0 == g_backBufferSurface && g_boundTextures[0] &&
         g_boundTextures[0]->GetType() == D3DRTYPE_TEXTURE && g_renderTargetTextures.count((void*)g_boundTextures[0])) {
-        // the loading screen's glow: a small blurred copy of the picture added over the whole screen. On the floating
-        // screen it just washes the picture out (a restart, drawn through the HUD layer, never shows it)
+        // the loading screen's glow: a small blurred copy of the picture added over the whole screen.  Bloom scales it like the glow of the
+        // menus (0 drops it; on the floating screen it otherwise just washes the picture out, a restart, drawn through the HUD layer,
+        // never shows it)
         DWORD blend = 0, src = 0, dest = 0;
         device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
         device->GetRenderState(D3DRS_SRCBLEND, &src);
@@ -239,7 +270,7 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
         if (blend && src == D3DBLEND_ONE && dest == D3DBLEND_ONE &&
             SUCCEEDED(((IDirect3DTexture9*)g_boundTextures[0])->GetLevelDesc(0, &glowDesc)) &&
             glowDesc.Width * 4 <= g_backBufferWidth) {
-            return D3D_OK;
+            return DrawGlowAtStrength(device, draw, g_cfg.bloomPct);
         }
     }
     int plan = ClassifyDraw(device);
@@ -248,7 +279,7 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
         DeviceRestoreAll(device); // only the per-eye draws below may find the device with the game's constants rewritten
     if (IsPhotoDraw())
         return DrawPhotoStereo(device, draw); // the photo viewer's picture: once per eye, onto the HUD panel
-    if (plan == 0 && g_vr.active && g_cfg.uiGlowPct > 0 && g_menuGlowFrame && g_sceneDrawsThisFrame > 0 &&
+    if (plan == 0 && g_vr.active && g_cfg.bloomPct > 0 && g_menuGlowFrame && g_sceneDrawsThisFrame > 0 &&
         strcmp(g_currentLevel, "showroom") != 0 && g_renderTarget0 && g_renderTarget0 == g_backBufferSurface &&
         IsMainSizedTarget() && g_boundTextures[0] && g_boundTextures[0]->GetType() == D3DRTYPE_TEXTURE &&
         g_renderTargetTextures.count((void*)g_boundTextures[0])) { // (slot 1 can hold a stale texture: car selector)
@@ -272,7 +303,7 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
         // normally drawn into that picture before the bloom is added over it; our UI layers are drawn afterwards instead.
         D3DSURFACE_DESC bd;
         if (SUCCEEDED(((IDirect3DTexture9*)g_boundTextures[1])->GetLevelDesc(0, &bd)) && bd.Width * 5 > g_backBufferWidth &&
-            bd.Width * 3 < g_backBufferWidth && g_cfg.uiGlowPct > 0 && g_renderTarget0 == g_backBufferSurface) {
+            bd.Width * 3 < g_backBufferWidth && g_cfg.bloomPct > 0 && g_renderTarget0 == g_backBufferSurface) {
             NoteSceneBloom(g_boundTextures[1]); // the UI's glow buffer, in the UI's own full-screen layout
             return D3D_OK;                      // (the UI and glow stretched over both eyes: they go onto our layers)
         }
@@ -317,7 +348,7 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
         (g_currentVsInfo->otherConstantNames.find("g_FlareSize") != std::string::npos ||
          g_currentVsInfo->otherConstantNames.find("g_FlareColour") != std::string::npos))
         return D3D_OK;
-    if (plan == 0 && g_cfg.uiGlowPct > 0 && g_menuGlowFrame && g_vr.active && strcmp(g_currentLevel, "showroom") != 0 &&
+    if (plan == 0 && g_cfg.bloomPct > 0 && g_menuGlowFrame && g_vr.active && strcmp(g_currentLevel, "showroom") != 0 &&
         IsRaceMode() && IsHalfResPass() && g_renderTarget0 != g_backBufferSurface && g_currentVsInfo &&
         g_currentVsInfo->ui) {
         // the 2D elements' glow only: a UI draw that samples a render target (the rear-view mirror picture, the scene) stays out
@@ -328,7 +359,7 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
     }
     if (plan == 0 && g_vr.active && IsRaceMode() && IsHalfResPass() &&
         g_renderTarget0 != g_backBufferSurface && g_currentVsInfo &&
-        !(g_cfg.uiGlowPct > 0 && (strcmp(g_currentLevel, "showroom") == 0 || g_menuGlowFrame)) && // menus keep the game's glow chain
+        !(g_cfg.bloomPct > 0 && (strcmp(g_currentLevel, "showroom") == 0 || g_menuGlowFrame)) && // menus keep the game's glow chain
         g_currentVsInfo->ui) {
         return D3D_OK;
     }
@@ -452,7 +483,7 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
         // The game blurs its UI render target into a glow (the lavender halo and bright text around menu popups) and adds
         // it in its last pass. The UI goes to our layer instead, so also draw it into the game's own target: its glow
         // chain then runs on the real UI, and the glow is added over our layers (see NoteSceneBloom, ComposeHudLayers).
-        const bool shadowUi = g_cfg.uiGlowPct > 0 && g_vr.active && strcmp(g_currentLevel, "showroom") == 0 &&
+        const bool shadowUi = g_cfg.bloomPct > 0 && g_vr.active && strcmp(g_currentLevel, "showroom") == 0 &&
                               g_renderTarget0 && g_renderTarget0 != g_backBufferSurface && IsMainSizedTarget();
         // an opaque full-screen copy of the scene (menu backdrop) would paint a washed-out rectangle over the 3D view:
         // drop it

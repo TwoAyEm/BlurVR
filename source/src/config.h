@@ -3,7 +3,8 @@
 #include "common.h"
 
 struct Config {
-    int enabled = 1, log = 0; // log: BlurVR.log is only written with Log=1 under [General]
+    int enabled = 1, log = 0; // enabled: [General] Enabled, the master switch (0 = the mod does nothing); log: BlurVR.log is only written with Log=1 under [General]
+    int vr = 1;               // enabled AND stereo: the VR half of the mod runs (SteamVR, the size override, the Ex device, ...).  Enabled=1 Stereo=0 is "flat": only the [Display] settings apply
     int recenterKey = 0x78;     // F9
     int headTrackingKey = 0x79; // F10
     int modeKey = 0x77;         // F8: auto -> force menu -> force race
@@ -12,7 +13,7 @@ struct Config {
     double ipdScale = 1.0;
     int oldVerticalTangents = 0; // [Tracking] OldVerticalTangents: 1 = read GetProjectionRaw's top/bottom the old (swapped) way
     int eyeTransform = 1; // [Tracking] EyeTransform: each eye's pose from SteamVR's eye-to-head transform (rotation included); 0 = half the IPD along x
-    int stereo = 1;
+    int stereo = 1; // [General] Stereo: 1 = VR, 0 = flat (no SteamVR).  Use g_cfg.vr to ask "is VR wanted"
     double fovScale = 1.0;
     double mainPassMinWidthFraction = 0.9;
     int requireDepthBuffer = 1;
@@ -20,19 +21,16 @@ struct Config {
     double hudXOffset = 0.0;      // extra inward (convergence) shift per eye, fraction of eye width
     int reflectionFlipMode =
         -1; // reflection-pass delta: -1 auto(by view determinant), 0 none, 1 conj Y, 2 conj X, 3 conj Z
-    int skipLensFlares = 0; // drop lens flares: the flare sprites (rear-view mirror) and the bloom/glow around lights
+    int skipLensFlares = 0; // [VR] NoLensFlare: drop lens flares: the flare sprites (rear-view mirror) and the bloom/glow around lights
     int fixReflectionLookup =
         1;                // adjust g_ReflectionViewMatrix (reflection-texture lookup) per eye like the reflection pass
     int deferVrStart = 1; // keep the game 2D (SteamVR theatre) until the first level starts loading, then start VR
     int threadedVrInit =
         1; // initialise OpenVR on a worker thread (avoids SteamVR's 'application not responding' dashboard at launch)
     int hideFullscreenOverlay = 1; // don't float an opaque full-screen HUD layer (loading videos) over the race
-    int customWidth = 2160,
-        customHeight =
-            1200; // extra display mode offered to the game (default 2160x1200, the Vive's native side-by-side size); 0 = off
+    int vrWidth = 2160, vrHeight = 1200; // [VR] Resolution: the VR game's picture size (the default is the Vive's native side-by-side size); BlurVR.ini keeps it, see video_settings.cpp
     int veilResultsScreen = 36;   // 0-255 veil over the results screen itself (no popup open)
-    int loadingGlow = 1;          // 1 = keep the game's glow on the loading screen, 0 = drop it
-    int uiGlowPct = 100;          // 0-200 the game's own glow around menu UI and popups, added over the UI layers (showroom), 0 = off
+    int bloomPct = 100;           // [VR] Bloom, 0-200 %: the game's own glow around menu UI, popups and loading screens (100 = as the game draws it, 0 = none)
     int veilRace = 120;           // 0-255 darkness of the veil drawn under race popups (options / results)
     int veilMenu = 100;           // 0-255 darkness of the veil drawn under menu dialogs (connecting, quit)
     int dimStrongPct = 60;        // 0-100 darkness of the scene dim behind pause/results menus
@@ -53,16 +51,15 @@ struct Config {
     double mirrorHeadParallax = 1.0;  // how much of the head position moves the rear view (0 = only the eye separation)
     // in-game toggle key for the 3D mirror (virtual-key code, 0 = unused); numpad 6 by default
     int keyMirror = 0x66;
-    int maxFps = 0;       // frame rate cap, 0 = none (the headset sets the pace); 60 avoids audio stutter some get at high frame rates
-    int forceNoVsync = 1; // 1 = present without V-Sync (the headset sets the frame rate, the game's own V-Sync would cap it at the monitor's)
+    int forceNoVsync = 0; // [Display] ForceNoVSync: 1 = present without V-Sync, 0 = the game's own setting.  In VR it is always off: the headset sets the frame rate
     int autoRecenter = 1; // 1 = recentre (SteamVR zero pose) every time a race starts; 0 = only on the recentre key
     int perfEnabled = 0;  // [Perf] Enabled: log GPU and CPU frame timing once a second (perf_probe.cpp); the key below flips it live
     int keyPerf = 0x67;   // numpad 7
     int keyVerticalTangents = 0x69; // [Debug] KeyVerticalTangents, numpad 9: OldVerticalTangents on/off
     int keyDump = 0x68;   // [Debug] KeyDump, numpad 8: save the picture sent to the headset and the UI layers as .bmp files (frame_dump.cpp)
-    int sharedTransport = 0; // [Render] SharedTransport: 1 = run the game on a Direct3D 9Ex device and hand the finished frame to SteamVR as a shared texture (no read back through the CPU)
-    int startAtSavedSize = 1; // [Render] StartAtSavedSize: a windowed start that Windows clamped to the desktop gets the game's saved video mode as its back buffer (display_modes.cpp)
-    int startWidth = 0, startHeight = 0; // [Render] StartWidth/StartHeight: the size a windowed start should have (0 = the video mode in the game's settings.xml)
+    int sharedTransport = 1; // [VR] SharedTransport (VR only, on by default; falls back to the CPU copy by itself if it cannot work): 1 = run the game on a Direct3D 9Ex device and hand the finished frame to SteamVR as a shared texture (no read back through the CPU)
+    int startAtSavedSize = 0; // VR only (set by LoadConfig): a windowed start that Windows clamped to the desktop gets the start size as its back buffer (display_modes.cpp, window_spoof.cpp)
+    int startWidth = 0, startHeight = 0; // VR only (set by LoadConfig): the size the start should have, the VR resolution
     int coverageEvery = 8; // [Hud] CoverageEvery: a UI draw's screen coverage (an occlusion query the CPU waits for) is measured again every this many frames, staggered; 1 = every draw as before
     int fitDesktopWindow = 1; // [Render] FitDesktopWindow: the game's window is never made bigger than the work area of its monitor (it is only a mirror of the headset)
     int desktopView = 1; // [Render] DesktopView: what the window on the desktop shows in a race: 1 = the left eye's view, 2 = the right eye's, 0 = the whole side-by-side picture
