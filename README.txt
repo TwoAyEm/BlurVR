@@ -62,7 +62,7 @@ Keys
   Num8 save what the headset sees as picture files (see Troubleshooting)
   Num9 vertical field of view: fixed / as in 1.1 (for comparing; see OldVerticalTangents)
 
-Settings: BlurVR.ini holds only the options most people need (the mode, resolution, start size).
+Settings: BlurVR.ini holds only the options most people need (the mode, V-Sync, key repeat, resolution, shared transport).
   Every option is listed below; add a line under its [section] in BlurVR.ini to use it (keys left out use the default shown).
   Edit with the game closed. Delete BlurVR.ini to go back to all defaults.
   The mod has three states: Enabled=0 does nothing at all; Enabled=1 with Stereo=1 is VR; Enabled=1 with Stereo=0 is "flat": the

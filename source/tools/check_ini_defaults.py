@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare BlurVR.ini with the defaults compiled into src/config.cpp.
 
-The shipped ini is the "standard" configuration: every active line in it should equal the built-in default, so that the
+The shipped ini (source/release/BlurVR.ini) is the "standard" configuration: every active line in it should equal the built-in default, so that the
 header's promise ("anything left out uses the default shown") is true.  Run from anywhere:
 
     python tools/check_ini_defaults.py [path\\to\\BlurVR.ini]
@@ -15,14 +15,21 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_CPP = os.path.join(HERE, '..', 'src', 'config.cpp')
-DEFAULT_INI = os.path.join(HERE, '..', '..', 'BlurVR.ini')
+DEFAULT_INI = os.path.join(HERE, '..', 'release', 'BlurVR.ini')
 
 
 def code_defaults(path):
     text = open(path, encoding='utf-8').read()
     found = {}
-    for m in re.finditer(r'ReadIni(?:Int|Double)\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*([^)]+?)\s*\)', text):
+    # ReadIniInt / ReadIniDouble / ReadIniDesktopView("Section", "Key", default[, "OldSection"]): the third argument is the default, the optional
+    # fourth the section an older ini kept the key in (still read, not a place for a new ini to use)
+    for m in re.finditer(r'ReadIni(?:Int|Double|DesktopView)\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*([^,)]+?)\s*[,)]', text):
         found[(m.group(1).lower(), m.group(2).lower())] = m.group(3)
+    # ReadIniSize("VR", "Resolution", &w, &h): written WxH, the default is what g_cfg.vrWidth / vrHeight are set to just before
+    width = re.search(r'vrWidth\s*=\s*(\d+)\s*;', text)
+    height = re.search(r'vrHeight\s*=\s*(\d+)\s*;', text)
+    for m in re.finditer(r'ReadIniSize\(\s*"([^"]+)"\s*,\s*"([^"]+)"', text):
+        found[(m.group(1).lower(), m.group(2).lower())] = '"%sx%s"' % (width.group(1) if width else '?', height.group(1) if height else '?')
     m = re.search(r'GetPrivateProfileStringA\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]*)"', text)
     if m:
         found[(m.group(1).lower(), m.group(2).lower())] = '"%s"' % m.group(3)
@@ -31,6 +38,9 @@ def code_defaults(path):
 
 def number(text):
     text = text.strip().strip('"')
+    # DesktopView is written left / right / both (the numbers 1 / 2 / 0 of older files are read too); a size is written WxH
+    text = {'left': '1', 'right': '2', 'both': '0'}.get(text.lower(), text)
+    text = re.sub(r'\s*[xX]\s*', 'x', text) if re.fullmatch(r'\d+\s*[xX]\s*\d+', text) else text
     try:
         return float(int(text, 0))
     except ValueError:
