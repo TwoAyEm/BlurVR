@@ -1,4 +1,4 @@
-# BlurVR 1.3
+# BlurVR 1.4
 
 **Seated VR for Blur (SteamVR / OpenVR).**
 
@@ -9,7 +9,7 @@ Play Blur in a headset, seated. Built and tested with a Valve Index; any SteamVR
 
 [Watch the video](https://www.youtube.com/watch?v=-Gwqe6Wcjd8)
 
-**Contents:** [What it does](#what-it-does) · [Requirements](#requirements) · [Install](#install) · [Resolution](#resolution) · [Keys](#keys) · [Settings](#settings) · [How it works](#how-it-works) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting) · [What is new](#what-is-new)
+**Contents:** [What it does](#what-it-does) · [Requirements](#requirements) · [Install](#install) · [Resolution](#resolution) · [Keys](#keys) · [Settings](#settings) · [How it works](#how-it-works) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting) · [What is new](#what-is-new) · [License](#license)
 
 ## What it does
 
@@ -232,6 +232,7 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - HUD detection is heuristic (worked out from how the game draws), so an unusual screen can show UI pieces in the wrong place.
 - Menus are the game image on a flat screen; use mouse/keyboard/controller as normal.
 - The window on the desktop is a mirror of one eye (`DesktopView`), cropped to the window's shape; it is not the headset's full view.
+- The menu key repeat limit is also on while a race loads and during its countdown (BlurVR sees the same full-screen fill there), so a key held down through the start reaches the game as taps until the countdown ends.
 
 ## Troubleshooting
 
@@ -244,6 +245,32 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **To run the game flat,** set `Stereo=0` (SteamVR is not used; the `[Display]` and `[Input]` settings still apply), or `Enabled=0` (the mod does nothing), or run `uninstall.bat`.
 
 ## What is new
+
+### Version 1.4
+
+**Menus**
+
+- **Menu key repeat limit.** Blur makes its own auto-repeat in the menus: it counts how long a key is held in frames, so at a high frame rate (with V-Sync off, say) a held arrow key scrolled a menu far too fast. New `[Input] KeyRepeatMs` (default 60): in the menus a held key or pad button now reaches the game as a tap, a short wait, then a tap every 60 ms, whatever the frame rate. It covers the keyboard and XInput pads (buttons, D-pad, left stick), in VR and flat, in the front-end menus and in the pause and results menus of a race (BlurVR recognises those by the full-screen dim the game draws behind them). **F8** forces it on or off if a menu is not recognised; `KeyRepeatMs=0` turns it off.
+
+**Flat mode**
+
+- **`Enabled` is the master switch, and `Stereo=0` runs the game flat:** SteamVR is never started and only the `[Display]` and `[Input]` settings apply, so the key repeat limit and the V-Sync setting work without a headset. `Enabled=0` still does nothing at all.
+
+**Resolution**
+
+- **One setting for the VR size:** `[VR] Resolution=WxH` replaces `CustomWidth`, `CustomHeight`, `StartWidth`, `StartHeight` and `StartAtSavedSize`.
+- **Headset sizes in the game's list.** In VR the game's resolution list shows sizes for headsets (HTC Vive, Rift, Valve Index, Quest, Steam Frame, Vive Pro 2, Bigscreen Beyond and others, see [Resolution](#resolution)) instead of the monitor's modes.
+- **The VR size no longer overwrites your normal one.** A size picked in the game's video options is saved in `BlurVR.ini`, and the game's own `settings.xml` keeps the flat game's size (put back when the game exits, with a backup beside it), so `Stereo=0` or `Enabled=0` starts at your normal resolution again.
+
+**Settings**
+
+- **Tidied into sections:** new `[Display]`, `[Input]` and `[VR]` sections. `ForceNoVSync` is now `0` by default (the game's own V-Sync setting; in VR V-Sync is always off and the headset sets the frame rate). `SharedTransport` is on by default. `Bloom` is one setting for the glow around menus, UI and loading screens. `NoLensFlare`, `DesktopView` (now `left`, `right` or `both`), `DesktopPresentEvery` and `FitDesktopWindow` moved under `[VR]`.
+- **Removed:** `MaxFps` (use V-Sync), `NoBloom`, `UiGlow` and `LoadingGlow` (replaced by `Bloom`), and `OldVerticalTangents` with its Num9 key (the corrected vertical field of view is confirmed on the Quest and with SteamVR).
+- An older `BlurVR.ini` keeps working where [Settings](#settings) says so, and the `BlurVR.ini` that comes with the mod is now a short file with the six settings most people need.
+
+**Other**
+
+- The BSD 3-Clause licence is included ([License](#license)), and this readme is now `README.md`.
 
 ### Version 1.3
 
@@ -272,3 +299,7 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - Diagnostics are opt-in: logging is off unless `Log=1`; **Num7** (timing) and **Num8** (picture files) are there for bug reports.
 
 </details>
+
+## License
+
+BlurVR is released under the [BSD 3-Clause License](https://github.com/TwoAyEm/BlurVR/blob/main/LICENSE.txt). `openvr_api.dll` is Valve's and comes with its own license (`LICENSE_openvr.txt`).

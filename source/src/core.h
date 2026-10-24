@@ -3,7 +3,7 @@
 #include "common.h"
 
 // Version of the mod, shown in the log.
-#define BLURVR_VERSION "1.3"
+#define BLURVR_VERSION "1.4"
 
 // Handle of this DLL (d3d9.dll proxy).
 extern HMODULE g_selfModule;
