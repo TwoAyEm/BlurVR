@@ -901,7 +901,7 @@ of section 18 (per plan, per piece of `RunDraw`, per hook, the mod's own device 
 `experiments/diagnostics-removed-in-1.1.patch` is the whole cleanup as a diff (`git apply -R` on the tree it was made from brings the diagnostics back); sections 16 to 18 above describe how they were used.
 
 **Release.**  Version string `BLURVR_VERSION` in core.h (1.1), also in the log's first line.  `release/BlurVR.ini` is the small ini that goes into the zip (resolution, start size, shared transport);
-every other option is documented in README.txt.  `tools/make_release.py` builds `dist/BlurVR-1.1.zip` from the tree (d3d9.dll, openvr_api.dll, the release ini, README.txt, install/uninstall, the OpenVR
+every other option is documented in README.md.  `tools/make_release.py` builds `dist/BlurVR-1.1.zip` from the tree (d3d9.dll, openvr_api.dll, the release ini, README.md, install/uninstall, the OpenVR
 licence; no source code: it is in the repository, and `tools/check_release_zip.py` fails on any source file in the zip).  Checks run for the cleanup: the host harness (`tools/hotpath_check.py`) gives the same hashes in all eight
 configurations as before it (the draw commands are unchanged), the DLL builds without warnings that matter, and a start, a menu and a race lap were not repeated after the cleanup (the next headset test of the
 release build is the check that matters).

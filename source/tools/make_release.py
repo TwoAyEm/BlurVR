@@ -4,7 +4,7 @@
     python tools/make_release.py            # uses source/d3d9.dll as it is (run build.bat nodeploy first)
 
 Contents: d3d9.dll (the build in source/), openvr_api.dll, the small release ini (source/release/BlurVR.ini),
-README.txt, install.bat, uninstall.bat and LICENSE_openvr.txt.  No source code: that is in the repository
+README.md, install.bat, uninstall.bat and LICENSE_openvr.txt.  No source code: that is in the repository
 (tools/check_release_zip.py checks the finished zip).  Checks first: the release ini only has keys the code reads,
 with values that are valid; the DLL is not older than the sources.
 """
@@ -56,7 +56,7 @@ def main():
         (dll, 'd3d9.dll'),
         (os.path.join(ROOT, 'openvr_api.dll'), 'openvr_api.dll'),
         (release_ini, 'BlurVR.ini'),
-        (os.path.join(ROOT, 'README.txt'), 'README.txt'),
+        (os.path.join(ROOT, 'README.md'), 'README.md'),
         (os.path.join(ROOT, 'install.bat'), 'install.bat'),
         (os.path.join(ROOT, 'uninstall.bat'), 'uninstall.bat'),
         (os.path.join(ROOT, 'LICENSE_openvr.txt'), 'LICENSE_openvr.txt'),

@@ -12,7 +12,7 @@ import sys
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EXPECTED = {'BlurVR.ini', 'LICENSE_openvr.txt', 'README.txt', 'd3d9.dll', 'install.bat', 'openvr_api.dll', 'uninstall.bat'}
+EXPECTED = {'BlurVR.ini', 'LICENSE_openvr.txt', 'README.md', 'd3d9.dll', 'install.bat', 'openvr_api.dll', 'uninstall.bat'}
 SOURCE_EXT = {'.cpp', '.c', '.h', '.hpp', '.py', '.def', '.md', '.patch', '.sh', '.clang-format', '.obj', '.lib', '.pdb'}
 
 
@@ -29,7 +29,7 @@ def main():
                 problems.append('not inside the BlurVR folder: ' + n)
             elif len(parts) > 2 or parts[1] == 'source':
                 problems.append('unexpected file (only the top level of BlurVR is expected): ' + n)
-            if os.path.splitext(n)[1].lower() in SOURCE_EXT or parts[-1] == 'build.bat':
+            if (os.path.splitext(n)[1].lower() in SOURCE_EXT and parts[-1] != 'README.md') or parts[-1] == 'build.bat':
                 problems.append('looks like source code: ' + n)
         have = {n.split('/')[1] for n in names if n.count('/') == 1}
         for missing in sorted(EXPECTED - have):
