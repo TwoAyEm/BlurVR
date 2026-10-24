@@ -1,8 +1,10 @@
 // The IDirect3DDevice9 hooks: state tracking, shader tracking, draw interception, Present/Reset.
 #include "device_hooks.h"
+#include "ai_hud.h"
 #include "config.h"
 #include "core.h"
 #include "d3d_hooks.h"
+#include "desktop_message.h"
 #include "device_state.h"
 #include "display_modes.h"
 #include "draw_dispatch.h"
@@ -42,15 +44,22 @@ static HRESULT STDMETHODCALLTYPE H_Present(IDirect3DDevice9* d, const RECT* a, c
         VrSubmitFrame(d);
     PerfFrameClose(d, raceFrame);
     // The picture the player sees goes to the headset; the window on the desktop is only a mirror.  Its Present is a copy of the
-    // whole back buffer into the desktop compositor's surface: DesktopPresentEvery presents it only every n-th race frame.
+    // whole back buffer into the desktop compositor's surface: DesktopPresentEvery presents it only every n-th race frame.  With DesktopView=off the
+    // window is given a "Playing in VR" picture now and then, and nothing in between (menus and loading screens too).
     bool skipPresent = false;
-    if (g_cfg.enabled && g_cfg.desktopPresentEvery > 1 && raceFrame) {
+    const bool messageOnly = DesktopMessageWanted();
+    if (messageOnly)
+        skipPresent = !DesktopMessageDue(d);
+    else if (g_cfg.enabled && g_cfg.desktopPresentEvery > 1 && raceFrame) {
         static unsigned presentCounter = 0;
         skipPresent = (presentCounter++ % (unsigned)g_cfg.desktopPresentEvery) != 0;
     }
     RECT mirrorRect = {0, 0, 0, 0};
     bool mirrorRectUsed = false;
-    if (!skipPresent && raceFrame && g_cfg.desktopView && g_vr.active) // the headset's copy is long made: the window gets one eye's view
+    if (messageOnly) {
+        if (!skipPresent)
+            mirrorRectUsed = DesktopMessagePaint(d, &mirrorRect);
+    } else if (!skipPresent && raceFrame && g_cfg.desktopView && g_cfg.desktopView != kDesktopViewOff && g_vr.active) // the headset's copy is long made: the window gets one eye's view
         mirrorRectUsed = VrShowEyeOnDesktop(d, &mirrorRect);
     HRESULT hr;
     {
@@ -63,6 +72,8 @@ static HRESULT STDMETHODCALLTYPE H_Present(IDirect3DDevice9* d, const RECT* a, c
             hr = present(d, mirrorRectUsed ? &mirrorRect : a, b, w, r);
             if (mirrorRectUsed && FAILED(hr)) { // the driver does not take a source rectangle: the whole back buffer from now on
                 g_desktopRectFailed = true;
+                if (g_cfg.desktopView == kDesktopViewOff)
+                    g_cfg.desktopView = 1; // (no message without a source rectangle)
                 Log("Present with a source rectangle failed 0x%08x: the desktop window shows the whole back buffer", (unsigned)hr);
                 hr = present(d, a, b, w, r);
             }
@@ -77,6 +88,7 @@ static HRESULT STDMETHODCALLTYPE H_Present(IDirect3DDevice9* d, const RECT* a, c
     }
     PerfPoll();
     GameCameraPoll();
+    AiHudPoll();
     InputLimiterFrame();
     return hr;
 }
@@ -93,6 +105,7 @@ static HRESULT STDMETHODCALLTYPE H_Reset(IDirect3DDevice9* d, D3DPRESENT_PARAMET
     ReleaseStreakLayer();
     ReleaseMirrorStereo();
     ReleasePhotoStereo();
+    ReleaseDesktopMessage();
     g_renderTargetTextures.clear();
     AdjustPresentParams(pp, true);
     if (pp)

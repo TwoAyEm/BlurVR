@@ -2,6 +2,9 @@
 #pragma once
 #include "common.h"
 
+// What g_cfg.desktopView is for [VR] DesktopView=off
+const int kDesktopViewOff = 3;
+
 struct Config {
     int enabled = 1, log = 0; // enabled: [General] Enabled, the master switch (0 = the mod does nothing); log: BlurVR.log is only written with Log=1 under [General]
     int vr = 1;               // enabled AND stereo: the VR half of the mod runs (SteamVR, the size override, the Ex device, ...).  Enabled=1 Stereo=0 is "flat": only the [Display] and [Input] settings apply
@@ -61,10 +64,9 @@ struct Config {
     int startWidth = 0, startHeight = 0; // VR only (set by LoadConfig): the size the start should have, the VR resolution
     int coverageEvery = 8; // [Hud] CoverageEvery: a UI draw's screen coverage (an occlusion query the CPU waits for) is measured again every this many frames, staggered; 1 = every draw as before
     int fitDesktopWindow = 1; // [Render] FitDesktopWindow: the game's window is never made bigger than the work area of its monitor (it is only a mirror of the headset)
-    int desktopView = 1; // [Render] DesktopView: what the window on the desktop shows in a race: 1 = the left eye's view, 2 = the right eye's, 0 = the whole side-by-side picture
+    int desktopView = 1; // [VR] DesktopView: what the window on the desktop shows in a race: 1 = the left eye's view, 2 = the right eye's, 0 = the whole side-by-side picture, kDesktopViewOff = "Playing in VR" and the game's logo (desktop_message.cpp)
     int desktopPresentEvery = 1; // [Render] DesktopPresentEvery: in a race the game's window gets a real Present only every this many frames (1 = every frame as the game wants)
-    int cullHeadFrustum = 1; // [Culling] HeadFrustum: 1 = the game culls with a frustum around the head (both eyes' field of view, the head's orientation), game_camera.cpp
-    double cullMarginDeg = 6.0, cullPullBack = 0.3; // [Culling] MarginDeg (added to every side) and PullBack (metres the frustum's apex is moved back)
+    double cullMarginDeg = 6.0, cullPullBack = 0.3; // [Culling] MarginDeg (added to every side) and PullBack (metres the frustum's apex is moved back) of the frustum around the head that the game culls with in VR, game_camera.cpp
     int foveationReport = 1; // [Foveation] Report: at VR start, log how much of each eye's image the lenses can show (lens_model.cpp)
 };
 

@@ -29,7 +29,7 @@ for %%f in (src\*.cpp) do set "SOURCES=!SOURCES! %%f"
 
 echo Building d3d9.dll ...
 if exist d3d9.dll del /q d3d9.dll
-%PY% -m ziglang c++ -target x86-windows-gnu -O2 -s -ffunction-sections -fdata-sections -Wl,--gc-sections -shared -fno-exceptions -fno-rtti -std=c++17 -Ithird_party -o d3d9.dll !SOURCES! d3d9.def -ld3d11 -ldxgi -luser32 -lkernel32
+%PY% -m ziglang c++ -target x86-windows-gnu -O2 -s -ffunction-sections -fdata-sections -Wl,--gc-sections -shared -fno-exceptions -fno-rtti -std=c++17 -Ithird_party -o d3d9.dll !SOURCES! d3d9.def -ld3d11 -ldxgi -lgdi32 -luser32 -lkernel32
 set "BUILD_ERROR=!errorlevel!"
 del /q *.obj *.lib 2>nul
 if not "!BUILD_ERROR!"=="0" goto :fail

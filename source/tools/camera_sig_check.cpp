@@ -93,6 +93,8 @@ static int Check(const char* path)
     }
     GameCameraScan scan;
     InitGameCameraScan(scan);
+    AiHudScan aiScan;
+    InitAiHudScan(aiScan);
     bool encrypted = false;
     for (const Section& s : sections) {
         if (!(s.flags & 0x20000000) || s.name == ".bind")
@@ -100,6 +102,7 @@ static int Check(const char* path)
         if (Entropy(s.bytes.data(), s.bytes.size() < (1u << 20) ? s.bytes.size() : (1u << 20)) > 7.5)
             encrypted = true;
         ScanForGameCameraCode(s.bytes.data(), s.bytes.size(), scan);
+        ScanForAiHudCode(s.bytes.data(), s.bytes.size(), aiScan);
     }
     if (encrypted)
         printf("  WARNING: a code section has the entropy of encrypted or packed data; this file cannot be scanned, dump the running module instead\n");
@@ -117,6 +120,17 @@ static int Check(const char* path)
                 snprintf(first[form], sizeof(first[form]), " first at 0x%08x", va(scan.first[fn][form]));
         printf("  %-13s tight %u match(es)%s, loose %u match(es)%s\n", names[fn], scan.count[fn][0], first[0], scan.count[fn][1], first[1]);
     }
+    // the AI HUD function (ai_hud.cpp) is optional: without it the markers stay on the flat HUD panel, so it does not change the result
+    AiHudCode aiCode;
+    char aiWhy[128];
+    if (ResolveAiHudCode(aiScan, aiCode, aiWhy, sizeof(aiWhy)))
+        printf("  AI HUD: UIAiHud update 0x%08x (%s), hook bytes %zu, plane test jump %s, root store %s, HUD sway update %s, billboard flag %s\n", va(aiCode.draw), aiWhy,
+               aiCode.drawStolen, aiCode.planeJump ? "found" : "NOT FOUND", aiCode.rootStore ? "found" : "NOT FOUND", aiCode.viewportUpdate ? "found" : "NOT FOUND",
+               aiCode.billboardFlag ? "found" : "NOT FOUND");
+    if (aiCode.billboardFlag)
+        printf("    UI.HUD.BillboardToCarInsteadOfCamera at 0x%08x\n", (unsigned)(uintptr_t)aiCode.billboardFlag);
+    else
+        printf("  AI HUD: not found (%s)\n", aiWhy);
     GameCameraCode code;
     char why[256];
     if (!ResolveGameCameraCode(scan, code, why, sizeof(why))) {

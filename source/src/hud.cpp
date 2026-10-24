@@ -1,6 +1,7 @@
 // HUD / UI layers: draw the game's 2D UI into off-screen layers and compose them into each eye as a world-locked panel.
 #include "hud.h"
 #include <algorithm>
+#include "ai_hud.h"
 #include "config.h"
 #include "core.h"
 #include "d3d_hooks.h"
@@ -963,6 +964,19 @@ void ComposeHudLayers(IDirect3DDevice9* device)
     if (mirrorContent) { // the rear-view mirror picture, one layer per eye, at the HUD's distance
         drawLayerQuads(g_mirrorTexture);
         setTexture(device, 0, g_hudTexture);
+    }
+    if (hudContent && g_cfg.vr) { // (the AI cars' markers go over their cars; what is cut out of the layer is cleared, and from the game's glow of its UI too)
+        IDirect3DSurface9* glowSurface = NULL;
+        UINT glowWidth = 0, glowHeight = 0;
+        D3DSURFACE_DESC glowDesc;
+        if (g_sceneBloom && g_cfg.bloomPct > 0 && g_sceneBloom->GetType() == D3DRTYPE_TEXTURE &&
+            SUCCEEDED(((IDirect3DTexture9*)g_sceneBloom)->GetLevelDesc(0, &glowDesc)) && SUCCEEDED(((IDirect3DTexture9*)g_sceneBloom)->GetSurfaceLevel(0, &glowSurface))) {
+            glowWidth = glowDesc.Width;
+            glowHeight = glowDesc.Height;
+        }
+        AiHudComposeMarkers(device, g_hudTexture, g_hudSurface, glowSurface, glowWidth, glowHeight);
+        if (glowSurface)
+            glowSurface->Release();
     }
     if (hudContent)
         drawHudQuads();

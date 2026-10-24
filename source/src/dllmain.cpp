@@ -46,6 +46,7 @@ IDirect3D9* WINAPI Direct3DCreate9(UINT sdk)
     Log("Direct3DCreate9(%u) -> %p", sdk, (void*)d3d);
     InstallWindowSizeSpoof(true); // every module (DllMain patched the executable)
     InstallInputHooks();          // (again: harmless when DllMain did it)
+    InstallExitHook();
     if (d3d)
         HookDirect3D(d3d);
     return d3d;
@@ -148,6 +149,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved)
         else if (!g_cfg.stereo)
             Log("Stereo=0 in the ini: flat mode, SteamVR is not started and only the [Display] and [Input] settings apply");
         VideoSettingsStart();          // the game's saved display mode, before the game reads it
+        InstallExitHook();             // ... and put back when the game ends
         InstallInputHooks();           // menu key repeat: the game's keyboard polls
         InstallWindowSizeSpoof(false); // the executable's imports, before the game looks at its window
     }

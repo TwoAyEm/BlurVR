@@ -1,4 +1,4 @@
-# BlurVR 1.4
+# BlurVR 1.5
 
 **Seated VR for Blur (SteamVR / OpenVR).**
 
@@ -7,7 +7,7 @@ Play Blur in a headset, seated. Built and tested with a Valve Index; any SteamVR
 > [!NOTE]
 > Unofficial fan mod; not affiliated with the game's publisher or developer.
 
-[Watch the video](https://www.youtube.com/watch?v=-Gwqe6Wcjd8)
+[Watch the video](https://www.youtube.com/watch?v=-Gwqe6Wcjd8) · [Download the latest release](https://github.com/TwoAyEm/BlurVR/releases)
 
 **Contents:** [What it does](#what-it-does) · [Requirements](#requirements) · [Install](#install) · [Resolution](#resolution) · [Keys](#keys) · [Settings](#settings) · [How it works](#how-it-works) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting) · [What is new](#what-is-new) · [License](#license)
 
@@ -18,18 +18,19 @@ Play Blur in a headset, seated. Built and tested with a Valve Index; any SteamVR
   - The camera position is fixed to the car; you look around from your seat.
   - Shadows, lights, motion blur and the HUD are all handled per eye.
   - The rear-view mirror is a real 3D panel: the road behind you is rendered once per eye, with depth.
+  - The markers over the AI cars (name, weapon, health) are shown over their cars in the world, at their depth, whichever way you look, and go to the cars nearest to your head. The HUD no longer sways with the car's acceleration.
 - Game controls are unchanged.
 
 ## Requirements
 
 - Windows
 - SteamVR
-- Blur (32-bit; any version of the game should do, Steam or not, see [What is new in 1.3](#version-13))
+- Blur (32-bit; any version of the game should do, Steam or not, see Version 1.3 under [What is new](#what-is-new))
 - A graphics card that runs Direct3D 11 (any recent one)
 
 ## Install
 
-1. Unzip so that the `BlurVR` folder sits inside your Blur folder (next to `Blur.exe`), e.g. `...\steamapps\common\Blur\BlurVR\`
+1. Download the zip of the latest version from the [releases page](https://github.com/TwoAyEm/BlurVR/releases) and unzip it so that the `BlurVR` folder sits inside your Blur folder (next to `Blur.exe`), e.g. `...\steamapps\common\Blur\BlurVR\`
 2. Run `BlurVR\install.bat` (copies `d3d9.dll` next to `Blur.exe`). `uninstall.bat` removes it again.
 3. Start SteamVR, then launch Blur from Steam.
 4. In the game's video options (**Options > Graphics > Resolution**) choose the size for your headset (see [Resolution](#resolution)).
@@ -144,7 +145,7 @@ Blur counts how long a key is held in frames and, after a second, repeats it eve
 | `Bloom` | `100` | Strength of the game's glow around its menus, UI and loading screens, in percent (0 = none, 200 = double) |
 | `NoLensFlare` | `0` | 1 = drop the flare sprites and the glow around lights |
 | `SharedTransport` | `1` | Run the game on a Direct3D 9Ex device and hand each finished race frame to SteamVR on the GPU instead of copying it through the CPU (saves several ms a frame, most at large sizes). On by default; it falls back to the CPU copy by itself when it cannot work. Set 0 if textures look wrong or the picture is black |
-| `DesktopView` | `left` | What the window on the desktop shows in a race: `left` = the left eye's view (cropped to the window's shape and drawn at the window's own size, which is cheap), `right` = the right eye's, `both` = the whole side-by-side picture. The headset's picture is not affected. |
+| `DesktopView` | `left` | What the window on the desktop shows in a race: `left` = the left eye's view (cropped to the window's shape and drawn at the window's own size, which is cheap), `right` = the right eye's, `both` = the whole side-by-side picture, `off` = no picture of the game at all: the window says "Playing in VR" with the game's logo (also in the menus and while loading) and is painted twice a second, which saves the GPU the copy of the game's picture. The headset's picture is not affected. Needs a windowed game without multisampling (otherwise it shows the left eye's view). |
 | `DesktopPresentEvery` | `1` | In a race, the window on the desktop (a mirror of the headset) really updates only every n-th frame (2-4 saves a little GPU time; 1 = every frame) |
 | `FitDesktopWindow` | `1` | 1 = the game's window is never made bigger than the work area of its monitor (at a 3840x2160 setting it would cover the whole desktop, or two monitors). The game still renders at the size it chose; the window shows one eye's view of it scaled to fit (`DesktopView`). Windowed mode only. 0 = as the game wants. |
 
@@ -175,6 +176,8 @@ Advanced (leave alone unless told to): `MainPassMinWidthFraction=0.9`, `RequireD
 | `Mirror3D` | `1` | Rear-view mirror as its own 3D panel (real depth) |
 | `MirrorConvergence`, `MirrorEyeScale`, `MirrorHeadParallax` | `1.5`, `1`, `1` | Depth that sits at the panel (m), eye separation scale, head parallax |
 
+The markers over the AI cars are not part of this panel and have no settings (see [What it does](#what-it-does)).
+
 ### `[Menu]`
 
 The floating screen in menus.
@@ -194,11 +197,12 @@ The floating screen in menus.
 | `KeyDump` | `0x68` (Num8) | Key for saving the headset picture as files |
 | `AdjustViewRotation` | `1` | |
 
-### `[Culling]`
+### `[Culling]`  (VR only)
+
+The game decides what to draw from a view frustum around your head (both eyes' field of view, the way you look) instead of from its own, narrower camera. BlurVR finds the game's camera code in the running `Blur.exe` and checks that its data is laid out as expected; if not, the game is left alone and `BlurVR.log` says why (`game camera: ...` and `head frustum: ...` lines). Tried so far: the Steam build and a non-Steam build. The markers over the AI cars use the same hooks, so they stay on the HUD panel when the code is not found.
 
 | Key | Default | What it does |
 |---|---|---|
-| `HeadFrustum` | `1` | 1 = the game decides what to draw from a view frustum around your head (both eyes' field of view, the way you look) instead of from its own, narrower camera. 0 = as in 1.1. BlurVR finds the game's camera code in the running `Blur.exe` and checks that its data is laid out as expected; if not, the game is left alone and `BlurVR.log` says why (`game camera: ...` and `head frustum: ...` lines). Tried so far: the Steam build and the same game without the Steam wrapper (`Blur.exe` of 13,738,496 bytes). |
 | `MarginDeg` | `6.0` | Degrees added to every side of that frustum (covers canted displays and quick head turns) |
 | `PullBack` | `0.3` | Metres the frustum's apex is moved back (covers the eyes' offset and leaning) |
 
@@ -222,7 +226,7 @@ When the game opens files under `levels\showroom` it is a menu; any other `level
 
 ### In short
 
-Blur is 32-bit Direct3D 9 under Steam DRM, so it is patched at runtime. Its vertex shaders get `g_mViewProj`; BlurVR decomposes that matrix to recover the camera and projection, then in the main 3D pass draws every object twice (left half / right half of the render target) with a per-eye offset, the headset's per-eye projection and your head pose. Screen-space passes (motion blur, shadow decals, deferred lights) are re-expressed in each eye's own camera. The HUD is drawn once per eye. The finished image is split and sent to SteamVR.
+Blur is 32-bit Direct3D 9, so BlurVR patches it at runtime. Its vertex shaders get `g_mViewProj`; BlurVR decomposes that matrix to recover the camera and projection, then in the main 3D pass draws every object twice (left half / right half of the render target) with a per-eye offset, the headset's per-eye projection and your head pose. Screen-space passes (motion blur, shadow decals, deferred lights) are re-expressed in each eye's own camera. The HUD is drawn once per eye. The finished image is split and sent to SteamVR.
 
 Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Start with [`source/NOTES.md`](https://github.com/TwoAyEm/BlurVR/blob/main/source/NOTES.md); build with `source/build.bat` on Windows or `build.sh` with Zig.
 
@@ -231,12 +235,14 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - The rear-view mirror and the planar reflections still decide what to draw with the game's own cameras.
 - HUD detection is heuristic (worked out from how the game draws), so an unusual screen can show UI pieces in the wrong place.
 - Menus are the game image on a flat screen; use mouse/keyboard/controller as normal.
-- The window on the desktop is a mirror of one eye (`DesktopView`), cropped to the window's shape; it is not the headset's full view.
+- The markers over the AI cars were tried on the Steam build and on a non-Steam build; with another build of the game they may stay on the HUD panel. A popup in the middle of the screen can take a piece of itself along with a marker, and a lock-on reticle or rival arrow further from the marker than its picture reaches is cut off.
+- The window on the desktop is a mirror of one eye (`DesktopView`), cropped to the window's shape; it is not the headset's full view. With `DesktopView=off` it only says "Playing in VR", but it is still the game's window: closing it quits the game, and the keyboard goes to the game only while it has the focus.
 - The menu key repeat limit is also on while a race loads and during its countdown (BlurVR sees the same full-screen fill there), so a key held down through the start reaches the game as taps until the countdown ends.
 
 ## Troubleshooting
 
 - **The view is still culled at the edges / looking away from the direction of travel:** set `Log=1` under `[General]`, start a race for a minute, and look in `BlurVR.log` for the lines that start with `game camera:` and `head frustum:`. They say whether the game's camera code was found in your `Blur.exe`, whether its data is laid out as expected, and how many frustums were replaced. If they say it was not found, send `BlurVR.log` and the size and date of your `Blur.exe`.
+- **The markers over the AI cars stay on the HUD panel:** they need `Stereo=1` and the game's camera code to be found. With `Log=1` the `game camera:` and `ai hud:` lines in `BlurVR.log` say whether the game's code was found and why a check failed; send the log and the size and date of your `Blur.exe`.
 - **Nothing happens / the game is flat:** start SteamVR first; run `uninstall.bat` to go back to the plain game.
 - **Something looks wrong in the headset:** press **Num8** while it is on screen. BlurVR saves `BlurVR_dump_<time>_picture_*.bmp` (the whole side-by-side picture, large files) and one file per HUD layer in the BlurVR folder: attach them to the report.
 - **Bug reports** should also include `BlurVR.log`: set `Log=1` under `[General]`, reproduce the problem, close the game, and send `BlurVR\BlurVR.log`.
@@ -245,6 +251,28 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **To run the game flat,** set `Stereo=0` (SteamVR is not used; the `[Display]` and `[Input]` settings still apply), or `Enabled=0` (the mod does nothing), or run `uninstall.bat`.
 
 ## What is new
+
+### Version 1.5
+
+**Races**
+
+- **The markers over the AI cars sit over their cars.** The game puts a marker (name, race position, weapon, health, the lock-on reticle) over every AI car, but BlurVR draws all of the game's 2D UI on one flat panel, so with your head turned the markers stayed on the panel instead of over the cars. Now each marker is cut out of the UI and drawn over its car in both eyes, at the car's distance (so it has the car's depth), whichever way you look. Close up it has its real size; far away it is never smaller than a few degrees, so it stays readable. Like in the flat game, a marker is never hidden behind anything.
+- **The markers go to the cars nearest to where you look.** The game gives its five markers to the cars nearest the player's car, wherever you are looking. Now they go to the five nearest your head within 80 degrees of where you look, so looking out of the side window marks the cars beside you.
+- **The HUD no longer sways with the car's acceleration** in the headset (the game moves, scales and turns the whole HUD with it, which would shift the markers). It stays at rest.
+- The markers have no settings and run only in VR (`Stereo=1`). BlurVR finds the game's code for them by what it looks like, as for the camera in 1.3 (tried so far: the Steam build and a non-Steam build), and checks it before it changes anything; if something is not as expected the markers stay on the HUD panel as in 1.4, and `BlurVR.log` says why (`ai hud: ...` lines).
+
+**Desktop window**
+
+- **`DesktopView=off`.** The window on the desktop says "Playing in VR" with the game's logo (taken from `Blur.exe`) instead of showing a mirror of the headset, in the menus and loading screens too. Nothing of the game's picture is copied to it: the window is painted twice a second, which saves the graphics card the work of the mirror. It is still the game's window (it keeps the keyboard focus and closing it quits the game). Needs a windowed game without multisampling; otherwise the window shows the left eye's view and `BlurVR.log` says why. `left`, `right` and `both` work as before.
+
+**Settings**
+
+- **Removed:** `[Culling] HeadFrustum`. The view frustum around your head (1.2) is now always used in VR (it was already VR only); `MarginDeg` and `PullBack` stay. A `HeadFrustum=0` in an older `BlurVR.ini` is ignored.
+
+**Other**
+
+- **The flat display mode is put back when the game exits.** In 1.4 this only happened at the next start: Blur ends with `TerminateProcess`, which skipped BlurVR's exit code, so after every VR run `settings.xml` still held the VR size and `BlurVR.log` began with "the last VR run did not end properly". BlurVR now hooks that call and restores the flat size first (a game that is killed from outside is still repaired at the next start).
+- Building from source needs `-lgdi32` (the message window is drawn with GDI); `build.bat` and `build.sh` have it. New host checks in `source\tools`: `ai_hud_check.py` and `desktop_message_check.py`.
 
 ### Version 1.4
 
@@ -272,14 +300,17 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 
 - The BSD 3-Clause licence is included ([License](#license)), and this readme is now `README.md`.
 
-### Version 1.3
+<details>
+<summary><b>Version 1.3</b></summary>
 
-- BlurVR should now work with any version of Blur, not only the Steam one. The head-following view frustum of 1.2 was tied to the addresses of the Steam build and did nothing on any other copy of the game (the Steam build with its wrapper removed, for example, is the same code and was left alone because its file is a different size). Now BlurVR finds the game's camera code in the running `Blur.exe` by what the code looks like, not by where it is, recognises the camera you are looking through from its own data, and checks that the game's data is laid out the way it expects before it changes anything. If some version of the game differs too much for that, the game is left alone (it draws what it always drew) and `BlurVR.log` says why. Tried so far: the Steam build and the same game without the Steam wrapper (`Blur.exe` of 13,738,496 bytes).
+- BlurVR should now work with any version of Blur, not only the Steam one. The head-following view frustum of 1.2 was tied to the addresses of the Steam build and did nothing on any other copy of the game (a non-Steam build of the same game, for example, is the same code and was left alone because its file is a different size). Now BlurVR finds the game's camera code in the running `Blur.exe` by what the code looks like, not by where it is, recognises the camera you are looking through from its own data, and checks that the game's data is laid out the way it expects before it changes anything. If some version of the game differs too much for that, the game is left alone (it draws what it always drew) and `BlurVR.log` says why. Tried so far: the Steam build and a non-Steam build.
+
+</details>
 
 <details>
 <summary><b>Version 1.2</b></summary>
 
-- Objects no longer pop in and out at the edges of your view or when you look away from the direction of travel. The game decides what to draw from its own camera, which is narrower than the headset's view and does not turn with your head (it is 60 degrees tall; the Index shows 109). BlurVR now gives it a view frustum around your head, wide enough for both eyes (`HeadFrustum`, `MarginDeg` and `PullBack` under `[Culling]`). Drawing more of the world can cost frame time: `HeadFrustum=0` gives back the old behaviour.
+- Objects no longer pop in and out at the edges of your view or when you look away from the direction of travel. The game decides what to draw from its own camera, which is narrower than the headset's view and does not turn with your head (it is 60 degrees tall; the Index shows 109). BlurVR now gives it a view frustum around your head, wide enough for both eyes (`MarginDeg` and `PullBack` under `[Culling]`). Drawing more of the world can cost frame time.
 - Quest 2 and other headsets that see further down than up: the upward and downward field of view were read swapped, which squashed the periphery and bent lines when the head turned. Fixed.
 - Each eye's position and rotation come from SteamVR (`EyeTransform`), which covers canted displays and IPD changes while playing.
 - The camera position and the pixel shaders' camera now move with each eye, so highlights, reflections and the sky no longer slide over surfaces when the head moves.

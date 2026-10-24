@@ -38,7 +38,7 @@ static bool ReadIniSize(const char* section, const char* key, int* width, int* h
     *height = h;
     return true;
 }
-// DesktopView: left / right / both, or the numbers 1 / 2 / 0 that earlier versions used
+// DesktopView: left / right / both / off, or the numbers 1 / 2 / 0 that earlier versions used (3 = off)
 static int ReadIniDesktopView(const char* section, const char* key, int defaultValue, const char* oldSection)
 {
     char buf[64];
@@ -50,6 +50,8 @@ static int ReadIniDesktopView(const char* section, const char* key, int defaultV
         return 2;
     if (!_stricmp(buf, "both"))
         return 0;
+    if (!_stricmp(buf, "off"))
+        return kDesktopViewOff;
     return (int)strtol(buf, NULL, 0);
 }
 void LoadConfig()
@@ -133,7 +135,6 @@ void LoadConfig()
     g_cfg.desktopView = ReadIniDesktopView("VR", "DesktopView", 1, "Render");
     g_cfg.fitDesktopWindow = ReadIniInt("VR", "FitDesktopWindow", 1, "Render");
     g_cfg.foveationReport = ReadIniInt("Foveation", "Report", 1);
-    g_cfg.cullHeadFrustum = ReadIniInt("Culling", "HeadFrustum", 1);
     g_cfg.cullMarginDeg = ReadIniDouble("Culling", "MarginDeg", 6.0);
     g_cfg.cullPullBack = ReadIniDouble("Culling", "PullBack", 0.3);
     char buf[32];

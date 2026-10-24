@@ -33,6 +33,31 @@ const PatternSource kSetCamera[2] = {
      "24 ?? 5F 66 0F D6 80 ?? ?? ?? ?? F3 0F 10 05 ?? ?? ?? ??",
      15}};
 
+// UIAiHud's per-frame function (vtable slot +0x30 of the class at 0x00EEB2E0 in the Steam build, function at 0x00C54180): push ebp / mov ebp,esp /
+// and esp,-16 / sub esp,0x184 / push ebx / push esi / push edi / mov edi,ecx / cmp byte [edi+0x144],0 / je / cmp byte [edi+0x190],0 / jne /
+// cmp dword [edi+0x1AC],-1 / je / call <view> / mov ebx,eax / mov [esp+0x24],ebx.  Matches once in the exe (checked on a dump of the Steam build).
+const PatternSource kAiHudDraw = {
+    "55 8B EC 83 E4 F0 81 EC 84 01 00 00 53 56 57 8B F9 80 BF 44 01 00 00 00 0F 84 ?? ?? ?? ?? 80 BF 90 01 00 00 00 0F 85 ?? ?? ?? ?? 83 BF AC 01 00 "
+    "00 FF 0F 84 ?? ?? ?? ?? E8 ?? ?? ?? ?? 8B D8 89 5C 24 24",
+    -1};
+// Two places inside that function, at fixed offsets from its start, checked against the bytes around them (call and jump targets are wildcards):
+//  +0x3FA ... the plane test of a car: xorps / comiss / mov [esp+0x38],eax / ja <skip> / xor ecx,ecx / mov edx,0x40000 / mov eax,[esi+ecx*4]  (the ja is at +0x404)
+//  +0x68B ... the store of the root's world position and the calls that draw the targeting elements: movss [eax+8],xmm0 / mov ecx,[esi+0x14] / test ecx,ecx / je / ...  (the
+//             instructions after the store, at +0x690, are the 5 bytes a detour can take)
+const PatternSource kAiHudPlane = {"0F 57 C9 0F 2F C8 89 44 24 38 0F 87 ?? ?? ?? ?? 33 C9 BA 00 00 04 00 8B 04 8E", -1};
+//  +0x6EF ... the choice of the marker's yaw: cmp byte [UI.HUD.BillboardToCarInsteadOfCamera],0 / je <the camera's yaw> / mov ecx,[esp+0x1C] / cmp dword [ecx+0xE0],5 / je ... / mov eax,[esp+0x38]
+//             (the flag's address is the operand of the first instruction)
+const PatternSource kAiHudBillboard = {"80 3D ?? ?? ?? ?? 00 0F 84 ?? ?? ?? ?? 8B 4C 24 1C 83 B9 E0 00 00 00 05 0F 84 ?? ?? ?? ?? 8B 44 24 38", -1};
+const PatternSource kAiHudRoot = {"F3 0F 11 40 08 8B 4E 14 85 C9 74 07 8B 01 8B 50 28 FF D2 8B 4E 18 85 C9 74 07 8B 01 8B 50 28 FF D2 8B 4E 1C", -1};
+// HudDummy's update (the HUD's root gadget; UI.Viewport.* tweakables): sub esp,0x28 / push esi / mov esi,ecx / cmp byte [esi+0x144],0 / je / mov ecx,[esi+0x1A0] /
+// test ecx,ecx / je / mov eax,[ecx] / movss xmm0,[...] / mulss xmm0,[...] / mov edx,[eax+0x4C] / movss [esp+4],xmm0.  Its end, at +0x297, is checked too: the stores of
+// the gadget's position (+0x70, +0x74 from +0x190, +0x194), rotation (+0x84 from +0x19C) and scale (+0x88, +0x8C from +0x198), which is what a hook puts back to rest.
+const PatternSource kViewportStart = {"83 EC 28 56 8B F1 80 BE 44 01 00 00 00 0F 84 ?? ?? ?? ?? 8B 8E A0 01 00 00 85 C9 0F 84 ?? ?? ?? ?? 8B 01 F3 0F 10 05 ?? ?? ?? ?? F3 0F 59 05 ?? ?? ?? ?? 8B 50 4C F3 0F 11 44 24 04", -1};
+const PatternSource kViewportEnd = {"0F 28 EC F3 0F 59 E8 F3 0F 58 AE 90 01 00 00 F3 0F 10 86 70 01 00 00 F3 0F 11 6E 70 0F 28 E8 F3 0F 59 EC F3 0F 59 EA F3 0F 58 AE 94 01 00 00 F3 0F 11 96 84 01 00 00 F3 0F 10 96 98 01 00 00", -1};
+const size_t kViewportEndAt = 0x297, kViewportStolen = 6; // (sub esp,0x28 / push esi / mov esi,ecx)
+const size_t kAiHudPlaneAt = 0x3FA, kAiHudPlaneJump = 0x404, kAiHudRootAt = 0x68B, kAiHudRootStore = 0x690, kAiHudBillboardAt = 0x6EF;
+const size_t kAiHudDrawStolen = 12; // push ebp / mov ebp,esp / and esp,-16 / sub esp,imm32: whole instructions, no relative operand
+
 const size_t kMaxPattern = 96;
 
 struct Pattern {
@@ -42,6 +67,7 @@ struct Pattern {
 };
 
 Pattern g_patterns[2][2];
+Pattern g_aiHudPattern, g_aiHudPlanePattern, g_aiHudRootPattern, g_aiHudBillboardPattern, g_viewportStart, g_viewportEnd;
 bool g_parsed = false;
 
 int HexValue(char c)
@@ -83,6 +109,12 @@ void ParseAll()
         Parse(kSetCameraData[form], g_patterns[0][form]);
         Parse(kSetCamera[form], g_patterns[1][form]);
     }
+    Parse(kAiHudDraw, g_aiHudPattern);
+    Parse(kAiHudPlane, g_aiHudPlanePattern);
+    Parse(kAiHudRoot, g_aiHudRootPattern);
+    Parse(kAiHudBillboard, g_aiHudBillboardPattern);
+    Parse(kViewportStart, g_viewportStart);
+    Parse(kViewportEnd, g_viewportEnd);
     g_parsed = true;
 }
 
@@ -171,6 +203,64 @@ bool ResolveGameCameraCode(const GameCameraScan& scan, GameCameraCode& out, char
             snprintf(why, whySize, "%s; %s; the camera description is 0x%x bytes there (expected 0x2b0 or a little more)", text[0], text[1],
                      (unsigned)out.cameraBytes);
         return false;
+    }
+    return true;
+}
+
+void InitAiHudScan(AiHudScan& scan)
+{
+    memset(&scan, 0, sizeof(scan));
+}
+
+void ScanForAiHudCode(const unsigned char* code, size_t size, AiHudScan& scan)
+{
+    ParseAll();
+    if (size >= g_viewportStart.length)
+        for (size_t i = 0; i + g_viewportStart.length <= size; i++)
+            if (code[i] == g_viewportStart.bytes[0] && Matches(code + i, g_viewportStart)) {
+                if (!scan.viewportCount++) {
+                    scan.viewportFirst = code + i;
+                    scan.viewportAvailable = size - i;
+                }
+            }
+    const Pattern& pattern = g_aiHudPattern;
+    if (size < pattern.length)
+        return;
+    unsigned char first = pattern.bytes[0]; // (the first byte is fixed)
+    for (size_t i = 0; i + pattern.length <= size; i++) {
+        if (code[i] != first || !Matches(code + i, pattern))
+            continue;
+        if (!scan.count++) {
+            scan.first = code + i;
+            scan.available = size - i;
+        }
+    }
+}
+
+bool ResolveAiHudCode(const AiHudScan& scan, AiHudCode& out, char* why, size_t whySize)
+{
+    ParseAll();
+    memset(&out, 0, sizeof(out));
+    if (why && whySize)
+        snprintf(why, whySize, "UIAiHud update: %u match%s%s", scan.count, scan.count == 1 ? "" : "es", scan.count == 1 ? "" : " (not usable)");
+    if (scan.count != 1 || kAiHudDrawStolen > g_aiHudPattern.length)
+        return false;
+    out.draw = scan.first;
+    out.drawStolen = kAiHudDrawStolen;
+    // the two inner sites, by their offsets from the start and the bytes around them: when the function is not the one the offsets were read from they
+    // are NULL and the markers stay where the game puts them
+    auto site = [&](const Pattern& pattern, size_t at, size_t target) -> const unsigned char* {
+        if (scan.available < at + pattern.length || !Matches(scan.first + at, pattern))
+            return NULL;
+        return scan.first + target;
+    };
+    out.planeJump = site(g_aiHudPlanePattern, kAiHudPlaneAt, kAiHudPlaneJump);
+    out.rootStore = site(g_aiHudRootPattern, kAiHudRootAt, kAiHudRootStore);
+    if (scan.available >= kAiHudBillboardAt + g_aiHudBillboardPattern.length && Matches(scan.first + kAiHudBillboardAt, g_aiHudBillboardPattern))
+        out.billboardFlag = (const unsigned char*)(uintptr_t)ReadU32(scan.first + kAiHudBillboardAt + 2);
+    if (scan.viewportCount == 1 && scan.viewportAvailable >= kViewportEndAt + g_viewportEnd.length && Matches(scan.viewportFirst + kViewportEndAt, g_viewportEnd)) {
+        out.viewportUpdate = scan.viewportFirst;
+        out.viewportStolen = kViewportStolen;
     }
     return true;
 }

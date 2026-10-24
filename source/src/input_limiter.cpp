@@ -5,6 +5,7 @@
 #include "d3d_hooks.h"
 #include "draw_dispatch.h"
 #include "game_mode.h"
+#include "inline_hook.h"
 
 static const double kRepeatDelayMs = 500.0; // how long a held key waits before it repeats
 
@@ -368,40 +369,7 @@ static HRESULT WINAPI H_DirectInput8Create(HINSTANCE instance, DWORD version, co
     return hr;
 }
 
-// ---- import patching (the executable's own import table)
-static bool PatchImport(HMODULE module, const char* dll, const char* name, void* hook, void** original)
-{
-    BYTE* base = (BYTE*)module;
-    IMAGE_DOS_HEADER* dos = (IMAGE_DOS_HEADER*)base;
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
-        return false;
-    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + dos->e_lfanew);
-    if (nt->Signature != IMAGE_NT_SIGNATURE)
-        return false;
-    DWORD rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
-    if (!rva)
-        return false;
-    for (IMAGE_IMPORT_DESCRIPTOR* imp = (IMAGE_IMPORT_DESCRIPTOR*)(base + rva); imp->Name; imp++) {
-        if (_stricmp((const char*)(base + imp->Name), dll) || !imp->OriginalFirstThunk)
-            continue;
-        IMAGE_THUNK_DATA* oft = (IMAGE_THUNK_DATA*)(base + imp->OriginalFirstThunk);
-        IMAGE_THUNK_DATA* ft = (IMAGE_THUNK_DATA*)(base + imp->FirstThunk);
-        for (; oft->u1.AddressOfData; oft++, ft++) {
-            if (IMAGE_SNAP_BY_ORDINAL(oft->u1.Ordinal) || strcmp((const char*)((IMAGE_IMPORT_BY_NAME*)(base + oft->u1.AddressOfData))->Name, name))
-                continue;
-            if ((void*)ft->u1.Function == hook)
-                return true; // already done
-            DWORD old;
-            if (!VirtualProtect(&ft->u1.Function, sizeof(void*), PAGE_READWRITE, &old))
-                return false;
-            *original = (void*)ft->u1.Function;
-            ft->u1.Function = (ULONG_PTR)hook;
-            VirtualProtect(&ft->u1.Function, sizeof(void*), old, &old);
-            return true;
-        }
-    }
-    return false;
-}
+// ---- import patching (the executable's own import table): PatchImport, inline_hook.cpp
 
 // XInput is imported by ordinal: find the entry that holds XInputGetState by its address (the loader has bound the table by now)
 static bool PatchXInput(HMODULE module)

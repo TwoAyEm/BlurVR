@@ -150,6 +150,10 @@ void AdjustPresentParams(D3DPRESENT_PARAMETERS* pp, bool isReset)
             }
             g_desktopRectUsable = true;
         }
+        if (g_cfg.desktopView == kDesktopViewOff && !g_desktopRectUsable) {
+            Log("DesktopView=off needs a windowed game without multisampling: the window shows the left eye's view instead");
+            g_cfg.desktopView = 1;
+        }
     }
     // Full screen needs a mode the monitor has; every headset size is one it has not, so such a request can only be a window.
     if (!pp || !g_cfg.vr || pp->Windowed || !pp->BackBufferWidth || !pp->BackBufferHeight || !g_direct3D)

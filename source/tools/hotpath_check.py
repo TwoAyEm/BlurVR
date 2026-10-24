@@ -27,7 +27,7 @@ def build(src, exe):
         third_party = os.path.join(HERE, '..', 'third_party')
     command = [sys.executable, '-m', 'ziglang', 'c++', '-target', 'x86-windows-gnu', '-O2', '-std=c++17', '-fno-exceptions',
                '-fno-rtti', '-I', src, '-I', third_party, os.path.join(HERE, 'hotpath_check.cpp')] + sources + \
-              ['-ld3d11', '-ldxgi', '-luser32', '-lkernel32', '-o', exe]
+              ['-ld3d11', '-ldxgi', '-lgdi32', '-luser32', '-lkernel32', '-o', exe]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0 or not os.path.exists(exe):
         print(result.stdout + result.stderr)

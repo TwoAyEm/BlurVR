@@ -2,6 +2,7 @@
 #include "video_settings.h"
 #include "config.h"
 #include "core.h"
+#include "inline_hook.h"
 
 static const char* const kKeys[5] = {"width", "height", "windowed", "x", "y"};
 struct DisplayMode {
@@ -212,6 +213,31 @@ void VideoSettingsEnd()
     }
     WriteSidecar(g_flat, false);
     Log("settings.xml: the flat game's display mode %sx%s is back", g_flat.value[0].c_str(), g_flat.value[1].c_str());
+}
+
+// Blur does not leave through ExitProcess: when it has torn everything down it calls TerminateProcess(GetCurrentProcess(), 0) (Blur.exe 0x42F826, in
+// the Steam and non-Steam builds), and a terminated process never gets DLL_PROCESS_DETACH.  So the flat mode is put back from the
+// executable's import of TerminateProcess, the last moment the game gives; the exit through DLL_PROCESS_DETACH stays for a game that does use ExitProcess.
+static BOOL(WINAPI* g_realTerminateProcess)(HANDLE, UINT) = NULL;
+static BOOL WINAPI H_TerminateProcess(HANDLE process, UINT exitCode)
+{
+    if (process == GetCurrentProcess() || GetProcessId(process) == GetCurrentProcessId())
+        VideoSettingsEnd();
+    return g_realTerminateProcess(process, exitCode);
+}
+
+void InstallExitHook()
+{
+    static bool done = false, failureLogged = false;
+    if (done || !g_sessionOpen)
+        return;
+    done = PatchImport(GetModuleHandleA(NULL), "KERNEL32.dll", "TerminateProcess", (void*)H_TerminateProcess, (void**)&g_realTerminateProcess);
+    if (done)
+        Log("VR display mode: the flat mode is put back when the game ends (TerminateProcess hooked)");
+    else if (!failureLogged) {
+        failureLogged = true;
+        Log("VR display mode: TerminateProcess is not imported by the game, the flat mode is put back at the next start");
+    }
 }
 
 void VideoSettingsNoteMode(UINT width, UINT height)

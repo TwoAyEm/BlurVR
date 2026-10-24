@@ -4,8 +4,8 @@
 // The game keeps its mode (width, height, windowed, x, y) in one element of settings.xml and reads it right after the proxy is loaded:
 //  * VR start: the flat mode is copied to BlurVR\display_backup.ini and settings.xml is seeded with the VR size in a window, so the game
 //    starts exactly as if that had been picked in its options;
-//  * VR end (the process exits): those five values go back into settings.xml, whatever the game wrote there meanwhile (its other
-//    settings, V-Sync and so on, stay as the game wrote them);
+//  * VR end (the game ends: its TerminateProcess call, or DLL_PROCESS_DETACH of a process that exits): those five values go back into settings.xml,
+//    whatever the game wrote there meanwhile (its other settings, V-Sync and so on, stay as the game wrote them);
 //  * a start that finds the last VR run still marked open (the game was killed, there was no exit) puts the flat mode back first, VR or not;
 //  * a size picked in the game's video options while VR runs is written to BlurVR.ini as the new Resolution.
 #pragma once
@@ -13,7 +13,10 @@
 
 // DllMain, after LoadConfig and the log are up and before the game reads its settings.
 void VideoSettingsStart();
-// DLL_PROCESS_DETACH of a process that exits.
+// The game is ending: DLL_PROCESS_DETACH of a process that exits, or the game's own TerminateProcess (InstallExitHook).  Does nothing twice.
 void VideoSettingsEnd();
+// Hook the game's TerminateProcess so that VideoSettingsEnd runs (Blur ends with it, which skips DLL_PROCESS_DETACH).  DllMain after VideoSettingsStart; again from
+// Direct3DCreate9 (idempotent).  Does nothing unless a VR session is open.
+void InstallExitHook();
 // The game is about to switch to this mode (CreateDevice / Reset), one of the modes it offers: in VR it becomes the Resolution.
 void VideoSettingsNoteMode(UINT width, UINT height);

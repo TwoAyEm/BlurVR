@@ -275,6 +275,27 @@ struct Counters {
     unsigned dataCalls, dataValid, dataMain, cameraCalls, rewrites, layoutFailures;
 } g_counters;
 
+// The pose of the main camera, published for other modules (ai_hud.cpp).  A sequence lock: the writer is the game's thread, the readers are
+// the thread that presents (or the game's own thread, for the hooks of ai_hud.cpp).
+volatile LONG g_poseSeq = 0;
+MainCameraPose g_pose;
+bool g_poseValid = false;
+
+void PublishPose(const CameraSnapshot& cam)
+{
+    MainCameraPose pose;
+    for (int i = 0; i < 3; i++) {
+        pose.pos[i] = cam.pos[i];
+        pose.right[i] = cam.right[i];
+        pose.up[i] = cam.up[i];
+        pose.fwd[i] = cam.fwd[i];
+    }
+    pose.projX = cam.projX;
+    pose.projY = cam.projY;
+    pose.frame = g_vr.frameCount;
+    PublishMainCameraPose(pose);
+}
+
 const void* g_mainData = NULL;    // the camera data struct last accepted as the main camera
 unsigned g_mainVerifiedAt = 0;    // data call number of that acceptance
 const unsigned kReverifyEvery = 600; // data calls
@@ -288,10 +309,10 @@ unsigned g_layoutNext = 0;
 
 bool HeadFrustumWanted()
 {
-    return g_cfg.cullHeadFrustum && g_vr.active && g_vr.poseValid && IsRaceMode();
+    return g_vr.active && g_vr.poseValid && IsRaceMode();
 }
 
-// The camera description for a main-camera SetCamera call: the game's own unless the head frustum is on, the layout is the expected one
+// The camera description for a main-camera SetCamera call: the game's own unless the VR half is running, the layout is the expected one
 // and it works out.
 const void* CameraForCulling(void* view, const void* camera, BYTE* scratch)
 {
@@ -353,8 +374,10 @@ void __attribute__((fastcall)) H_SetCameraData(void* self, void* edx, const void
             } else if (data == g_mainData)
                 g_mainData = NULL;
         }
-        if (snapshot.isMain)
+        if (snapshot.isMain) {
             g_counters.dataMain++;
+            PublishPose(snapshot); // (only ai_hud.cpp reads the pose)
+        }
     }
     g_snapshot = snapshot;
     g_origSetCameraData(self, edx, data);
@@ -371,7 +394,7 @@ void __attribute__((fastcall)) H_SetCamera(void* self, void* edx, const void* ca
     g_origSetCamera(self, edx, camera, flag);
 }
 
-// Every executable section of the loaded Blur.exe except the Steam stub's.
+// Every executable section of the loaded Blur.exe except the extra one of the Steam build.
 void ScanModule(GameCameraScan& scan, DWORD& imageSize, DWORD& timeStamp)
 {
     BYTE* base = (BYTE*)GetModuleHandleA(NULL);
@@ -392,6 +415,34 @@ void ScanModule(GameCameraScan& scan, DWORD& imageSize, DWORD& timeStamp)
 
 } // namespace
 
+void PublishMainCameraPose(const MainCameraPose& pose)
+{
+    InterlockedIncrement(&g_poseSeq); // odd: being written
+    MemoryBarrier();
+    g_pose = pose;
+    g_poseValid = true;
+    MemoryBarrier();
+    InterlockedIncrement(&g_poseSeq);
+}
+
+bool GetMainCameraPose(MainCameraPose& out)
+{
+    for (int attempt = 0; attempt < 8; attempt++) {
+        LONG before = g_poseSeq;
+        if (before & 1)
+            continue; // being written
+        MemoryBarrier();
+        MainCameraPose copy = g_pose;
+        bool valid = g_poseValid;
+        MemoryBarrier();
+        if (before == g_poseSeq) {
+            out = copy;
+            return valid;
+        }
+    }
+    return false;
+}
+
 void GameCameraPoll()
 {
     static unsigned frame = 0, tries = 0, nextTry = 1, reports = 0;
@@ -403,7 +454,7 @@ void GameCameraPoll()
                 g_counters.dataCalls, g_counters.dataValid, g_counters.dataMain, g_counters.cameraCalls, g_counters.rewrites, g_counters.layoutFailures);
         return;
     }
-    if (!g_cfg.cullHeadFrustum || !g_cfg.vr || tries >= 5 || frame < nextTry)
+    if (!g_cfg.vr || tries >= 5 || frame < nextTry)
         return;
     tries++;
     nextTry = frame + 120; // (a build that unpacks its code late is looked at again a little later)
