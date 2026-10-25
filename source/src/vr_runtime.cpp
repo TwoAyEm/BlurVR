@@ -685,7 +685,7 @@ void VrSubmitFrame(IDirect3DDevice9* device)
         PerfScope perfCompose(PS_COMPOSE);
         ComposeHudLayers(device);
     }
-    if (g_cfg.fpsCounter && IsRaceMode() && g_sceneDrawsThisFrame > 0) // (race frames only: a menu frame is a flat picture, not a pair of eyes)
+    if (g_cfg.fpsCounter && IsRaceMode() && g_sceneDrawsThisFrame > 0) // (3D frames only, the showroom's included: a loading screen or a video is a flat picture, not a pair of eyes)
         FpsCounterDraw(device);
     NoteSceneBloom(NULL); // the game's glow buffer is only valid for the frame it was drawn in
     g_menuGlowFrame = IsRaceMode(); // the game's UI glow is kept in the race too (HUD, pause, restart, car selector)

@@ -1,11 +1,11 @@
-// Frame rate counter in the headset ([VR] FpsCounter, numpad 9 in game): how many frames the game presents a second, painted into both eyes of a race frame as a
+// Frame rate counter in the headset ([VR] FpsCounter, numpad 9 in game): how many frames the game presents a second, painted into both eyes of a 3D frame (a race or the showroom) as a
 // small panel that stays where you look.  NOTES.md section 27.
 #pragma once
 #include "common.h"
 
 // Called once per presented frame (VrSubmitFrame).  Counts the frame and, twice a second, takes the figure the panel shows.  A branch while the counter is off.
 void FpsCounterFrame();
-// Race frames, once the HUD is composed and before the picture goes to the headset: paints the panel into both eyes of the back buffer.  Does nothing while the
+// 3D frames (races, the showroom), once the HUD is composed and before the picture goes to the headset: paints the panel into both eyes of the back buffer.  Does nothing while the
 // counter is off or has no figure yet.
 void FpsCounterDraw(IDirect3DDevice9* device);
 // The state block belongs to the device: released before every Reset.
