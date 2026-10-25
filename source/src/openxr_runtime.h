@@ -24,6 +24,8 @@ void XrRuntimeEyeToHead(int eye, float m[3][4]);
 bool XrRuntimeCovered();
 // True while the application has the focus.
 bool XrRuntimeFocused();
+// The refresh rate the runtime reports for its display, in Hz: the predicted display period of the last frame xrWaitFrame gave (0 until there is one).
+double XrRuntimeRefreshHz();
 // The session's state as a word ("synchronized", "visible", "focused", ...), for logs.
 const char* XrRuntimeSessionState();
 // The finished race picture (both eyes side by side, width x height) to the headset as a projection layer.

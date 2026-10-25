@@ -4,6 +4,7 @@
 #include "core.h"
 #include "d3d_hooks.h"
 #include "matrix.h"
+#include "openxr_runtime.h"
 #include "render_state.h"
 #include "vr_runtime.h"
 
@@ -96,6 +97,10 @@ int FpsCounterGraph(float* samples, int capacity)
 
 static double HeadsetRefreshHz()
 {
+    if (g_cfg.vrApi == kVrApiOpenXr) { // (OpenXR has no IVRSystem: the runtime's predicted display period is the rate)
+        const double hz = XrRuntimeRefreshHz();
+        return hz >= 20.0 && hz <= 1000.0 ? hz : 0;
+    }
     if (!g_vr.system)
         return 0;
     ETrackedPropertyError error = ETrackedPropertyError_TrackedProp_Success;

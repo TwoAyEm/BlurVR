@@ -7,6 +7,7 @@
 #include "d3d_hooks.h"
 #include "fps_counter.h"
 #include "matrix.h"
+#include "openxr_runtime.h"
 #include "render_state.h"
 #include "vr_runtime.h"
 
@@ -72,6 +73,12 @@ static void SetHeadset(bool known) // (read when the next figure is taken)
 {
     g_fakeSystem.GetFloatTrackedDeviceProperty = FakeFloatProperty;
     g_vr.system = known ? &g_fakeSystem : NULL;
+}
+// and, with Api=openxr, the refresh rate the OpenXR runtime reports (the real one is in openxr_runtime.cpp, which this check does not link)
+static double g_fakeXrHz = 0;
+double XrRuntimeRefreshHz()
+{
+    return g_fakeXrHz;
 }
 
 // ---- counting frames ----------------------------------------------------------------------------------------------------------------------------------------
@@ -720,6 +727,42 @@ static void CheckDevice(const char* folder, bool ex)
             SavePanel(pixels, folder, name);
     }
     SetHeadset(false);
+
+    // Api=openxr: the rate is the OpenXR runtime's, never the OpenVR system's (which is present here, at 90 Hz, to show that it is not asked) and white when the runtime has none.
+    // 72 frames a second is green at 72 Hz and yellow at 90 Hz, so the colour says which rate was used.
+    {
+        SetPose(false);
+        SetHeadset(true);
+        g_cfg.vrApi = kVrApiOpenXr;
+        g_fakeXrHz = 72;
+        ShowFigure(72);
+        prepare();
+        FpsCounterDraw(device);
+        CHECK(ReadBack(device, backBuffer, copy, pixels), "read back");
+        CHECK(CheckFigure(pixels, 72, "openxr 72 Hz", FpsCounterColor(72, 72) & 0xFFFFFF) == 0, "with Api=openxr the figure is coloured against the runtime's 72 Hz (green)");
+        CHECK(!Near(FpsCounterColor(72, 72), FpsCounterColor(72, 90), 40), "72 of 72 and 72 of 90 differ in colour");
+        g_fakeXrHz = 0;
+        ShowFigure(72);
+        prepare();
+        FpsCounterDraw(device);
+        CHECK(ReadBack(device, backBuffer, copy, pixels), "read back");
+        CHECK(CheckFigure(pixels, 72, "openxr no rate", 0xFFFFFF) == 0, "with Api=openxr and no rate from the runtime the figure is white, whatever the OpenVR system says");
+        g_fakeXrHz = 10; // (nothing a headset has: not taken as a rate)
+        ShowFigure(72);
+        prepare();
+        FpsCounterDraw(device);
+        CHECK(ReadBack(device, backBuffer, copy, pixels), "read back");
+        CHECK(CheckFigure(pixels, 72, "openxr absurd rate", 0xFFFFFF) == 0, "a rate of 10 Hz from the runtime is not used");
+        g_cfg.vrApi = kVrApiOpenVr; // with OpenVR the runtime's rate is not asked for
+        g_fakeXrHz = 72;
+        ShowFigure(72);
+        prepare();
+        FpsCounterDraw(device);
+        CHECK(ReadBack(device, backBuffer, copy, pixels), "read back");
+        CHECK(CheckFigure(pixels, 72, "openvr", FpsCounterColor(72, 90) & 0xFFFFFF) == 0, "with Api=openvr the figure is coloured against the OpenVR system's 90 Hz (yellow)");
+        g_fakeXrHz = 0;
+        SetHeadset(false);
+    }
 
     // the same picture whatever the head does: the panel is where the eyes are, not where the car is
     {

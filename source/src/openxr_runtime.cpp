@@ -36,6 +36,8 @@ struct XrRuntimeState {
     bool running = false, lost = false;
     bool frameBegun = false, shouldRender = false, posesLocated = false;
     XrTime displayTime = 0;
+    XrDuration displayPeriod = 0; // nanoseconds, as xrWaitFrame last reported it (0 = none yet)
+    double loggedHz = 0;
     XrFovf fov[2];          // the field of view of each eye as the runtime gave it at start: the one the picture is submitted with
     XrPosef eyePose[2];     // this frame's eyes in the local space
     float eyeToHead[2][3][4];
@@ -163,6 +165,15 @@ static bool BeginFrame()
     }
     g_xr.frameBegun = true; // (a frame that was still open is discarded by the runtime, XR_FRAME_DISCARDED is a success)
     g_xr.displayTime = state.predictedDisplayTime;
+    g_xr.displayPeriod = state.predictedDisplayPeriod;
+    if (state.predictedDisplayPeriod > 0) { // (logged when it first arrives and when it changes by more than a percent, at most 8 times)
+        const double hz = 1e9 / (double)state.predictedDisplayPeriod;
+        static int logged = 0;
+        if ((g_xr.loggedHz <= 0 || fabs(hz - g_xr.loggedHz) > g_xr.loggedHz * 0.01) && logged++ < 8) {
+            g_xr.loggedHz = hz;
+            Log("OpenXR: display period %.2f ms (%.1f Hz)", (double)state.predictedDisplayPeriod / 1e6, hz);
+        }
+    }
     // SteamVR keeps a new application SYNCHRONIZED, with shouldRender false, until it has submitted a frame that has layers: that frame is rendered
     g_xr.shouldRender = state.shouldRender != 0 || g_xr.sessionState == XR_SESSION_STATE_SYNCHRONIZED;
     g_xr.posesLocated = false;
@@ -591,6 +602,10 @@ bool XrRuntimeCovered()
 bool XrRuntimeFocused()
 {
     return g_xr.sessionState == XR_SESSION_STATE_FOCUSED;
+}
+double XrRuntimeRefreshHz()
+{
+    return g_xr.displayPeriod > 0 ? 1e9 / (double)g_xr.displayPeriod : 0.0;
 }
 const char* XrRuntimeSessionState()
 {

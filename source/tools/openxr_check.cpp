@@ -96,6 +96,7 @@ static int Full()
         XrRuntimeFinishFrame();
     }
     printf("frames: %d, with a pose: %d, race frames submitted: %d, menu frames submitted: %d\n", frames, withPose, sceneFrames, menuFrames);
+    printf("the runtime's refresh rate (predicted display period): %.1f Hz\n", XrRuntimeRefreshHz());
     // information only: does the runtime give this application the focus once it has shown frames?  (race frames for up to 20 s)
     DWORD focusStart = GetTickCount();
     int focusFrames = 0;
