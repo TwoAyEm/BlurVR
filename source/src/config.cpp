@@ -132,7 +132,7 @@ void LoadConfig()
     g_cfg.keyDump = ReadIniInt("Debug", "KeyDump", 0x68);
     g_cfg.coverageEvery = ReadIniInt("Hud", "CoverageEvery", 8);
     g_cfg.desktopPresentEvery = ReadIniInt("VR", "DesktopPresentEvery", 1, "Render");
-    g_cfg.desktopView = ReadIniDesktopView("VR", "DesktopView", 1, "Render");
+    g_cfg.desktopView = ReadIniDesktopView("VR", "DesktopView", kDesktopViewOff, "Render");
     g_cfg.fitDesktopWindow = ReadIniInt("VR", "FitDesktopWindow", 1, "Render");
     g_cfg.foveationReport = ReadIniInt("Foveation", "Report", 1);
     g_cfg.cullMarginDeg = ReadIniDouble("Culling", "MarginDeg", 6.0);

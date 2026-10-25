@@ -79,7 +79,7 @@ In VR the size is kept in `BlurVR.ini` (`[VR] Resolution=WxH`): the game starts 
 
 ## Settings
 
-`BlurVR.ini` holds only the options most people need (the mode, V-Sync, key repeat, resolution, shared transport). Every option is listed below; add a line under its `[section]` in `BlurVR.ini` to use it (keys left out use the default shown). Edit with the game closed. Delete `BlurVR.ini` to go back to all defaults.
+`BlurVR.ini` holds only the options most people need (the mode, resolution, shared transport, desktop window). Every option is listed below; add a line under its `[section]` in `BlurVR.ini` to use it (keys left out use the default shown). Edit with the game closed. Delete `BlurVR.ini` to go back to all defaults.
 
 The mod has three states:
 
@@ -145,7 +145,7 @@ Blur counts how long a key is held in frames and, after a second, repeats it eve
 | `Bloom` | `100` | Strength of the game's glow around its menus, UI and loading screens, in percent (0 = none, 200 = double) |
 | `NoLensFlare` | `0` | 1 = drop the flare sprites and the glow around lights |
 | `SharedTransport` | `1` | Run the game on a Direct3D 9Ex device and hand each finished race frame to SteamVR on the GPU instead of copying it through the CPU (saves several ms a frame, most at large sizes). On by default; it falls back to the CPU copy by itself when it cannot work. Set 0 if textures look wrong or the picture is black |
-| `DesktopView` | `left` | What the window on the desktop shows in a race: `left` = the left eye's view (cropped to the window's shape and drawn at the window's own size, which is cheap), `right` = the right eye's, `both` = the whole side-by-side picture, `off` = no picture of the game at all: the window says "Playing in VR" with the game's logo (also in the menus and while loading) and is painted twice a second, which saves the GPU the copy of the game's picture. The headset's picture is not affected. Needs a windowed game without multisampling (otherwise it shows the left eye's view). |
+| `DesktopView` | `off` | What the window on the desktop shows: `off` = no picture of the game at all: the window says "Playing in VR" with the game's logo (also in the menus and while loading) and is painted twice a second, which saves the GPU the copy of the game's picture. `left` = the left eye's view in a race (cropped to the window's shape and drawn at the window's own size, which is cheap), `right` = the right eye's, `both` = the whole side-by-side picture. The headset's picture is not affected. `off` needs a windowed game without multisampling (otherwise the window shows the left eye's view). Before 1.5 the default was `left`. |
 | `DesktopPresentEvery` | `1` | In a race, the window on the desktop (a mirror of the headset) really updates only every n-th frame (2-4 saves a little GPU time; 1 = every frame) |
 | `FitDesktopWindow` | `1` | 1 = the game's window is never made bigger than the work area of its monitor (at a 3840x2160 setting it would cover the whole desktop, or two monitors). The game still renders at the size it chose; the window shows one eye's view of it scaled to fit (`DesktopView`). Windowed mode only. 0 = as the game wants. |
 
@@ -236,7 +236,7 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - HUD detection is heuristic (worked out from how the game draws), so an unusual screen can show UI pieces in the wrong place.
 - Menus are the game image on a flat screen; use mouse/keyboard/controller as normal.
 - The markers over the AI cars were tried on the Steam build and on a non-Steam build; with another build of the game they may stay on the HUD panel. A popup in the middle of the screen can take a piece of itself along with a marker, and a lock-on reticle or rival arrow further from the marker than its picture reaches is cut off.
-- The window on the desktop is a mirror of one eye (`DesktopView`), cropped to the window's shape; it is not the headset's full view. With `DesktopView=off` it only says "Playing in VR", but it is still the game's window: closing it quits the game, and the keyboard goes to the game only while it has the focus.
+- By default (`DesktopView=off`) the window on the desktop only says "Playing in VR", but it is still the game's window: closing it quits the game, and the keyboard goes to the game only while it has the focus. With `left` or `right` it is a mirror of one eye, cropped to the window's shape; it is not the headset's full view.
 - The menu key repeat limit is also on while a race loads and during its countdown (BlurVR sees the same full-screen fill there), so a key held down through the start reaches the game as taps until the countdown ends.
 
 ## Troubleshooting
@@ -263,10 +263,11 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 
 **Desktop window**
 
-- **`DesktopView=off`.** The window on the desktop says "Playing in VR" with the game's logo (taken from `Blur.exe`) instead of showing a mirror of the headset, in the menus and loading screens too. Nothing of the game's picture is copied to it: the window is painted twice a second, which saves the graphics card the work of the mirror. It is still the game's window (it keeps the keyboard focus and closing it quits the game). Needs a windowed game without multisampling; otherwise the window shows the left eye's view and `BlurVR.log` says why. `left`, `right` and `both` work as before.
+- **`DesktopView=off`, the new default.** The window on the desktop says "Playing in VR" with the game's logo (taken from `Blur.exe`) instead of showing a mirror of the headset, in the menus and loading screens too. Nothing of the game's picture is copied to it: the window is painted twice a second, which saves the graphics card the work of the mirror. It is still the game's window (it keeps the keyboard focus and closing it quits the game). Needs a windowed game without multisampling; otherwise the window shows the left eye's view and `BlurVR.log` says why. `left`, `right` and `both` work as before, and an older `BlurVR.ini` that has a `DesktopView` line keeps it; set `DesktopView=left` to get the mirror back.
 
 **Settings**
 
+- **`DesktopView` is `off` by default** and is in the `BlurVR.ini` that comes with the mod; `ForceNoVSync` and `KeyRepeatMs` are no longer there (their defaults are unchanged, add them under `[Display]` and `[Input]` to change them).
 - **Removed:** `[Culling] HeadFrustum`. The view frustum around your head (1.2) is now always used in VR (it was already VR only); `MarginDeg` and `PullBack` stay. A `HeadFrustum=0` in an older `BlurVR.ini` is ignored.
 
 **Other**

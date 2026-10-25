@@ -39,7 +39,7 @@ def code_defaults(path):
 def number(text):
     text = text.strip().strip('"')
     # DesktopView is written left / right / both / off (the numbers 1 / 2 / 0 / 3 of older files are read too); a size is written WxH
-    text = {'left': '1', 'right': '2', 'both': '0', 'off': '3'}.get(text.lower(), text)
+    text = {'left': '1', 'right': '2', 'both': '0', 'off': '3', 'kdesktopviewoff': '3'}.get(text.lower(), text)
     text = re.sub(r'\s*[xX]\s*', 'x', text) if re.fullmatch(r'\d+\s*[xX]\s*\d+', text) else text
     try:
         return float(int(text, 0))

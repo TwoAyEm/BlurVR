@@ -324,7 +324,7 @@ where `ReadIniInt(..., oldSection)` says so: Stereo, ForceNoVSync, SharedTranspo
 `[Input]` (VR and flat) KeyRepeatMs (60 ms; 0 = off): menu key repeat limiter, `input_limiter.cpp` (section 19).
 `[VR]` (ignored when flat) Resolution (WxH, 2160x1200; `CustomWidth`/`CustomHeight` of `[Render]` are read when it is missing), Bloom (100 %: the game's glow around
 menus, UI and loading screens; 0 = none), NoLensFlare (0; 1 drops the flare sprites and the bloom/glow around lights), SharedTransport (1, section 15),
-DesktopView (left / right / both / off; 1 / 2 / 0 / 3 still read, section 20), DesktopPresentEvery (1, section 18), FitDesktopWindow (1).
+DesktopView (off; left / right / both; 1 / 2 / 0 / 3 still read, section 20), DesktopPresentEvery (1, section 18), FitDesktopWindow (1).
 `[Tracking]` Rotation, Position, PositionScale (game units per metre), IpdScale.
 `[Render]` (VR only) FovScale, SeamGutter (0); undocumented tuning: MainPassMinWidthFraction (0.9), RequireDepthBuffer, HalfResPasses, ReflectionLookupFix,
 ReflectionFlip; `[Hud]` CoverageEvery (8, section 18).
@@ -915,7 +915,7 @@ licence; no source code: it is in the repository, and `tools/check_release_zip.p
 configurations as before it (the draw commands are unchanged), the DLL builds without warnings that matter, and a start, a menu and a race lap were not repeated after the cleanup (the next headset test of the
 release build is the check that matters).
 
-## 20. The window on the desktop: one eye instead of the side-by-side picture (`[Render] DesktopView`, default 1)
+## 20. The window on the desktop: one eye instead of the side-by-side picture (`[VR] DesktopView`, default `off` since 1.5, `left` before)
 
 The game's window shows the back buffer, which in a race is the side-by-side picture, stretched to whatever shape the window has (and the window is often clamped to the desktop, section 16): two squashed
 eyes.  `VrShowEyeOnDesktop` (vr_runtime.cpp), called from `H_Present` just before the real Present of a race frame that is really going to be presented (not on the frames `DesktopPresentEvery` skips), paints one
@@ -939,7 +939,7 @@ rectangle, Reset); this runtime also accepts the rectangle with DISCARD.  The co
 compositor does not depend on them; the GPU does them before the next frame, now about a quarter of the pixels they were (a 1920x1080 window: 2 million instead of 8.3 million), and with `DesktopPresentEvery=4` on one frame in four.
 Not measured in the headset yet: compare the frame time with `DesktopView=0` (old whole-picture present) and `DesktopView=1`.
 
-**`DesktopView=off`** (`desktop_message.cpp`, added in 1.5; `g_cfg.desktopView == kDesktopViewOff` = 3).  The window is the game's, so it has to exist (it is what the keyboard focus belongs to, and the game reads its keyboard through DirectInput and `GetKeyState`; how it sets the cooperative level was not checked, so the window is
+**`DesktopView=off`** (`desktop_message.cpp`, added in 1.5 and the default since then; `g_cfg.desktopView == kDesktopViewOff` = 3).  The window is the game's, so it has to exist (it is what the keyboard focus belongs to, and the game reads its keyboard through DirectInput and `GetKeyState`; how it sets the cooperative level was not checked, so the window is
 not hidden or minimised, which could cost the keyboard), but nothing about it needs the game's picture.  While the headset runs (`g_vr.active`) and a Present can take a source rectangle (`g_desktopRectUsable`, the windowed,
 non-multisampled COPY case of the paragraph above), `H_Present` skips the game's Present except when `DesktopMessageDue` says so (the first one, a change of the window's client size, then one every 500 ms), and then paints the message with
 `DesktopMessagePaint` instead of the eye crop: a picture the size of the window (at most the back buffer) is built with GDI once per size (`DesktopMessageBuildPicture`: a dark gradient, the logo, "Playing in VR" in Segoe UI, centred
