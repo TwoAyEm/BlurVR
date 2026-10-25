@@ -5,7 +5,7 @@
 
 // Run the final composite draw with the quarter-size bloom texture replaced by black (bloom off).
 HRESULT DrawWithoutBloom(IDirect3DDevice9* device, const DrawCall& draw);
-// Run the full-screen motion blur once per eye with a per-eye velocity remap.
+// Run the full-screen motion blur once per eye with a per-eye velocity remap; with [VR] MotionBlur=0 the pass is drawn once as a plain copy of the picture.
 HRESULT MotionBlurPerEye(IDirect3DDevice9* device, const DrawCall& draw);
 // Adjust a shadow decal draw for one eye; false when the draw is not a decal.
 bool ApplyShadowDecalForEye(IDirect3DDevice9* device, int eye, float* savedConstants);

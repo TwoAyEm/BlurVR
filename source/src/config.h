@@ -26,6 +26,7 @@ struct Config {
     int reflectionFlipMode =
         -1; // reflection-pass delta: -1 auto (the axis the game's reflection camera has turned round, else by the view determinant), 0 none, 1 conj X, 2 conj Y, 3 conj Z
     int skipLensFlares = 0; // [VR] NoLensFlare: drop lens flares: the flare sprites (rear-view mirror) and the bloom/glow around lights
+    int motionBlur = 1;     // [VR] MotionBlur: 1 = the game's motion blur, drawn per eye; 0 = its pass copies the picture instead of blurring it (screen_space_passes.cpp)
     int fixReflectionLookup =
         1;                // adjust g_ReflectionViewMatrix (reflection-texture lookup) per eye like the reflection pass
     int deferVrStart = 1; // keep the game 2D (SteamVR theatre) until the first level starts loading, then start VR

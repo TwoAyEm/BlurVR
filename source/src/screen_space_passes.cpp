@@ -59,8 +59,95 @@ HRESULT DrawWithoutBloom(IDirect3DDevice9* device, const DrawCall& draw)
 // whole (side-by-side) image, so its radial centre lands on the seam between the eyes. Run it once per eye instead,
 // with the matrix re-expressed in that eye's own frame.
 
+// [VR] MotionBlur=0: the blur's pixel shader is swapped for one that copies the colour image, so the pass still writes the picture the
+// composite reads but costs one texture read a pixel instead of the blur's many. Sampler 0 is the colour image in every variant of the
+// blur (ps_2_0 and ps_3_0 alike), and the vertex shader it is paired with only has to pass the texture coordinate on. A pixel shader has
+// to be of the model of its vertex shader, so there is one of each model. Hand assembled (tools/motion_blur_check.cpp decodes both):
+//   ps_2_0 / ps_3_0, def c0, 1, 1, 1, 1 / dcl t0.xy (v0.xy with texcoord0) / dcl_2d s0 / texld r0, t0 (v0), s0 / mov r0.w, c0.x / mov oC0, r0
+static const DWORD kMotionBlurCopyShader20[] = {
+    0xFFFF0200,
+    0x05000051, 0xA00F0000, 0x3F800000, 0x3F800000, 0x3F800000, 0x3F800000, // def c0, 1, 1, 1, 1
+    0x0200001F, 0x80000000, 0xB0030000,                                     // dcl t0.xy
+    0x0200001F, 0x90000000, 0xA00F0800,                                     // dcl_2d s0
+    0x03000042, 0x800F0000, 0xB0E40000, 0xA0E40800,                         // texld r0, t0, s0
+    0x02000001, 0x80080000, 0xA0000000,                                     // mov r0.w, c0.x
+    0x02000001, 0x800F0800, 0x80E40000,                                     // mov oC0, r0
+    0x0000FFFF};
+static const DWORD kMotionBlurCopyShader30[] = {
+    0xFFFF0300,
+    0x05000051, 0xA00F0000, 0x3F800000, 0x3F800000, 0x3F800000, 0x3F800000, // def c0, 1, 1, 1, 1
+    0x0200001F, 0x80000005, 0x90030000,                                     // dcl_texcoord v0.xy
+    0x0200001F, 0x90000000, 0xA00F0800,                                     // dcl_2d s0
+    0x03000042, 0x800F0000, 0x90E40000, 0xA0E40800,                         // texld r0, v0, s0
+    0x02000001, 0x80080000, 0xA0000000,                                     // mov r0.w, c0.x
+    0x02000001, 0x800F0800, 0x80E40000,                                     // mov oC0, r0
+    0x0000FFFF};
+static IDirect3DDevice9* g_copyShaderDevice = NULL; // the device the copy shaders below belong to
+static IDirect3DPixelShader9* g_copyShader[2] = {NULL, NULL}; // ps_2_0, ps_3_0
+static bool g_copyShaderFailed[2] = {false, false};
+
+static IDirect3DPixelShader9* CopyShaderFor(IDirect3DDevice9* device, int shaderMajor)
+{
+    if (device != g_copyShaderDevice) { // (a shader belongs to the device that made it)
+        g_copyShader[0] = g_copyShader[1] = NULL;
+        g_copyShaderFailed[0] = g_copyShaderFailed[1] = false;
+        g_copyShaderDevice = device;
+    }
+    int slot = shaderMajor >= 3 ? 1 : 0;
+    if (!g_copyShader[slot] && !g_copyShaderFailed[slot]) {
+        PFN_CreatePixelShader createPixelShader = (PFN_CreatePixelShader)g_deviceOriginals[VT_CreatePixelShader];
+        if (FAILED(createPixelShader(device, slot ? kMotionBlurCopyShader30 : kMotionBlurCopyShader20, &g_copyShader[slot])) ||
+            !g_copyShader[slot]) {
+            g_copyShader[slot] = NULL;
+            g_copyShaderFailed[slot] = true;
+            Log("motion blur: the copy shader (ps_%d_0) could not be created: MotionBlur=0 leaves the blur as the game draws it", slot ? 3 : 2);
+        }
+    }
+    return g_copyShader[slot];
+}
+
+// The log says once for each blur shader the game uses (it has 26 variants: sample counts, a filter spread) which one this run draws.
+static void NoteMotionBlurShader(const PixelShaderInfo* info, const char* how)
+{
+    static int seen[8];
+    static int seenCount = 0;
+    for (int i = 0; i < seenCount; i++)
+        if (seen[i] == info->id)
+            return;
+    if (seenCount >= 8)
+        return;
+    seen[seenCount++] = info->id;
+    bool filter = false;
+    for (const ShaderConstant& constant : info->constants)
+        filter = filter || NamesEqual(constant.name.c_str(), "g_vFilter");
+    Log("motion blur: pixel shader %d (ps_%d_0, %d constants%s) %s", info->id, info->shaderMajor, (int)info->constants.size(),
+        filter ? ", with the g_vFilter taps" : "", how);
+}
+
+// Draw the pass once with the copy shader in place of the blur's; false when it cannot be done (the caller then blurs as the game does).
+static bool DrawMotionBlurAsCopy(IDirect3DDevice9* device, const DrawCall& draw, HRESULT* result)
+{
+    if (!g_currentPsHandle || !g_currentPsInfo)
+        return false;
+    IDirect3DPixelShader9* copyShader = CopyShaderFor(device, g_currentPsInfo->shaderMajor);
+    if (!copyShader)
+        return false;
+    NoteMotionBlurShader(g_currentPsInfo, "drawn as a plain copy (MotionBlur=0)");
+    PFN_SetPixelShader setPixelShader = (PFN_SetPixelShader)g_deviceOriginals[VT_SetPixelShader]; // (not the hooked one: the tracking keeps the blur's info)
+    setPixelShader(device, copyShader);
+    *result = draw();
+    setPixelShader(device, (IDirect3DPixelShader9*)g_currentPsHandle);
+    return true;
+}
+
 HRESULT MotionBlurPerEye(IDirect3DDevice9* device, const DrawCall& draw)
 {
+    if (!g_cfg.motionBlur) {
+        HRESULT copied = D3D_OK;
+        if (DrawMotionBlurAsCopy(device, draw, &copied))
+            return copied;
+    } else if (g_currentPsInfo)
+        NoteMotionBlurShader(g_currentPsInfo, "drawn per eye");
     PFN_SetShaderConstantF setPixelConstants = (PFN_SetShaderConstantF)g_deviceOriginals[VT_SetPixelShaderConstantF];
     PFN_SetRenderState setRenderState = (PFN_SetRenderState)g_deviceOriginals[VT_SetRenderState];
     PFN_SetScissorRect setScissorRect = (PFN_SetScissorRect)g_deviceOriginals[VT_SetScissorRect];

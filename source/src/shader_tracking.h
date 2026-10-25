@@ -10,6 +10,7 @@ struct ShaderConstant {
 };
 struct PixelShaderInfo {
     int id = 0;
+    int shaderMajor = 0; // 2 for ps_2_0, 3 for ps_3_0: a pixel shader that stands in for this one must be of the same model (it is paired with the same vertex shader)
     std::vector<ShaderConstant> constants;
     bool motionBlur = false;
     int shadowMatrixReg = -1;
@@ -42,6 +43,8 @@ struct VertexShaderInfo {
 extern std::unordered_map<void*, PixelShaderInfo*> g_pixelShaders;
 // Info for the pixel shader that is currently bound (NULL if unknown).
 extern PixelShaderInfo* g_currentPsInfo;
+// The pixel shader that is currently bound, as the game set it (NULL if none or unknown).
+extern void* g_currentPsHandle;
 // Shadow copy of the pixel shader float constants.
 extern float g_psConstants[256 * 4];
 extern int g_pixelShaderCount;

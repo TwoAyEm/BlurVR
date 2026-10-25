@@ -3,6 +3,7 @@
 
 std::unordered_map<void*, PixelShaderInfo*> g_pixelShaders;
 PixelShaderInfo* g_currentPsInfo = NULL;
+void* g_currentPsHandle = NULL;
 float g_psConstants[256 * 4];
 int g_pixelShaderCount = 0;
 
@@ -113,6 +114,7 @@ float g_vsConstants[256 * 4]; // what the game believes is in the VS float const
 
 void ParsePixelShaderConstants(const DWORD* fn, PixelShaderInfo* info)
 {
+    info->shaderMajor = (int)((fn[0] >> 8) & 0xFF); // version token 0xFFFF0300 = ps_3_0
     // whole token stream (comment blocks are skipped by their length field, instructions by theirs)
     const DWORD* token = fn + 1;
     for (int guard = 0; guard < 20000; guard++) {

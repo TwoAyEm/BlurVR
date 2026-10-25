@@ -381,6 +381,7 @@ static HRESULT STDMETHODCALLTYPE H_SetPixelShader(IDirect3DDevice9* d, IDirect3D
 {
     HRESULT hr = ORIG(HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9*, IDirect3DPixelShader9*), VT_SetPixelShader)(d, s);
     if (SUCCEEDED(hr)) {
+        g_currentPsHandle = s;
         unsigned slot = ShaderCacheSlot(s);
         if (s && g_psCache.handle[slot] == s)
             g_currentPsInfo = g_psCache.info[slot];

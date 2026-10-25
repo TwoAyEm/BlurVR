@@ -144,6 +144,7 @@ void LoadConfig()
     // [VR] Bloom (% of the game's glow around menus, UI and loading screens) and NoLensFlare only act in VR: flat they stay at "as the game draws it"
     g_cfg.bloomPct = g_cfg.vr ? ReadIniInt("VR", "Bloom", 100) : 100;
     g_cfg.skipLensFlares = g_cfg.vr ? ReadIniInt("VR", "NoLensFlare", 0) : 0;
+    g_cfg.motionBlur = g_cfg.vr ? ReadIniInt("VR", "MotionBlur", 1) : 1;
     g_cfg.reflectionFlipMode = ReadIniInt("Render", "ReflectionFlip", -1);
     g_cfg.hudXOffset = ReadIniDouble("Hud", "XOffset", 0.0);
     g_cfg.hudScale = ReadIniDouble("Hud", "Scale", 0.6);

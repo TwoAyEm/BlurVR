@@ -147,6 +147,7 @@ Blur counts how long a key is held in frames and, after a second, repeats it eve
 | `Resolution` | `2160x1200` | The size of the VR picture, both eyes side by side (see [Resolution](#resolution)). It is the extra entry in the game's resolution list and the size the game starts at. Pick another size in the game's video options and BlurVR writes it here for you. The game's own settings keep the flat game's size. |
 | `Bloom` | `100` | Strength of the game's glow around its menus, UI and loading screens, in percent (0 = none, 200 = double) |
 | `NoLensFlare` | `0` | 1 = drop the flare sprites and the glow around lights |
+| `MotionBlur` | `1` | 0 = no motion blur. The game's blur pass then only copies the picture instead of blurring it (one texture read a pixel instead of the blur's many), which saves some GPU time. 1 = the game's own motion blur, drawn for each eye. |
 | `SharedTransport` | `1` | Run the game on a Direct3D 9Ex device and hand each finished race frame to SteamVR on the GPU instead of copying it through the CPU (saves several ms a frame, most at large sizes). On by default; it falls back to the CPU copy by itself when it cannot work. Set 0 if textures look wrong or the picture is black |
 | `DesktopView` | `off` | What the window on the desktop shows: `off` = no picture of the game at all: the window says "Playing in VR" with the game's logo (also in the menus and while loading) and is painted twice a second, which saves the GPU the copy of the game's picture. `left` = the left eye's view in a race (cropped to the window's shape and drawn at the window's own size, which is cheap), `right` = the right eye's, `both` = the whole side-by-side picture. The headset's picture is not affected. `off` needs a windowed game without multisampling (otherwise the window shows the left eye's view). Before 1.5 the default was `left`. |
 | `DesktopPresentEvery` | `1` | In a race, the window on the desktop (a mirror of the headset) really updates only every n-th frame (2-4 saves a little GPU time; 1 = every frame) |
@@ -282,6 +283,10 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **With `Api=openxr` the colours are measured against the refresh rate the OpenXR runtime reports** (the frame period it predicts for its display; with `Log=1` it is in `BlurVR.log` as `OpenXR: display period ...`). A runtime that reports none leaves the panel white. The figure and the graph are the same with both APIs.
 - The figure has been seen working in the headset; the graph under it, and the panel with OpenXR, have so far only been checked without a headset.
 
+**Motion blur**
+
+- **New: `MotionBlur=0` (under `[VR]`) turns the motion blur off.** The game's blur pass then only copies the picture, so there is no blur at all and the pass costs a fraction of what it did. `1` (the default) is the game's blur as before. With `Log=1`, `BlurVR.log` has a `motion blur:` line saying which of the game's blur shaders a run uses and whether it was drawn as a copy.
+
 **Package**
 
 - The zip has two new files next to `openvr_api.dll`: `openxr_loader.dll` (the 32-bit OpenXR loader of the Khronos Group) and its license, `LICENSE_openxr.txt`. The loader is only used with `Api=openxr`; copy it too if you update by replacing single files.
@@ -289,7 +294,7 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 
 **Other**
 
-- The OpenXR headers are in `source\third_party\openxr`, the code is in `source\src\openxr_runtime.cpp` (`source\NOTES.md`, section 27), and `build.bat` and `build.sh` need nothing new. New host checks in `source\tools`: `openxr_check.py` tests the loader and the runtime without the game (with `--system` it also starts the runtime and runs frames of a test picture in the headset), and `fps_counter_check.py` checks the FPS counter (counting, colours, the panel on a real Direct3D 9 device).
+- The OpenXR headers are in `source\third_party\openxr`, the code is in `source\src\openxr_runtime.cpp` (`source\NOTES.md`, section 27), and `build.bat` and `build.sh` need nothing new. New host checks in `source\tools`: `motion_blur_check.py` checks the motion blur switch on a real Direct3D 9 device, `openxr_check.py` tests the loader and the runtime without the game (with `--system` it also starts the runtime and runs frames of a test picture in the headset), and `fps_counter_check.py` checks the FPS counter (counting, colours, the panel on a real Direct3D 9 device).
 
 ### Version 1.5
 

@@ -60,6 +60,7 @@ enum DeviceVtable { // IDirect3DDevice9 vtable indices
 };
 typedef HRESULT(STDMETHODCALLTYPE* PFN_SetDepthStencilSurface)(IDirect3DDevice9*, IDirect3DSurface9*);
 typedef HRESULT(STDMETHODCALLTYPE* PFN_SetPixelShader)(IDirect3DDevice9*, IDirect3DPixelShader9*);
+typedef HRESULT(STDMETHODCALLTYPE* PFN_CreatePixelShader)(IDirect3DDevice9*, const DWORD*, IDirect3DPixelShader9**);
 
 // Call the original (unhooked) function stored for a vtable slot
 #define ORIG(T, idx) ((T)g_deviceOriginals[idx])

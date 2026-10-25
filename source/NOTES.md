@@ -138,6 +138,32 @@ its radial centre landed on the seam. Per eye: `M_e = T * M * S` with
 `off = 0` (left) / `0.5` (right), `A,B` = game projection scales. Column 2 (depth) is left untouched. Confirmed good
 in the headset.
 
+**Motion blur off** (`[VR] MotionBlur=0`, `DrawMotionBlurAsCopy`). The pass cannot just be skipped: its pixel shader writes the whole picture that the
+composite reads next (colour in sampler 0, depth, stencil and noise in 1..3; output rgb = a weighted average of its samples, alpha 1), so a skipped
+draw leaves the target undefined. The draw is made once (no per-eye split, nothing to remap) with the blur's pixel shader swapped for a copy of
+sampler 0 at the pixel's own texture coordinate with alpha 1, which is what the blur gives where nothing moves: one texture read a pixel instead of
+the blur's many (7 to 24 in the straight-line code of the biggest variants, and a loop in 18 of them).
+The game has 26 blur shaders (`g_vStepScale` + `g_mMatrix`, read out of `Blur.exe`): 16 plain ones with a `rep` loop (`g_vSettings`), 8 with the
+`g_vFilter` taps (2 to 5 of them, `g_vSettings1/2`; the game's own name for the pass is `MotionBlurDoF`), and a minimal one in ps_3_0 and one in
+ps_2_0 (`textureMap`/`depthMap`). All of them take the colour image in sampler 0 and the texture coordinate in v0 (t0 in ps_2_0). A Direct3D 9 pixel
+shader has to be of the model of its vertex shader, so there are two copy shaders, hand assembled in `screen_space_passes.cpp`
+(`kMotionBlurCopyShader20` / `30`; the real runtime accepts both, `tools/motion_blur_check.py`), made once on first use through
+`g_deviceOriginals[VT_CreatePixelShader]` (so `H_CreatePixelShader` never sees them) and chosen by `PixelShaderInfo::shaderMajor` (the version token
+of the blur shader). The blur's shader is put back with the original `SetPixelShader` from `g_currentPsHandle` (new, kept by `H_SetPixelShader`
+like `g_currentVsHandle`); the mod's own tracking (`g_currentPsInfo`) never changes. If the handle is not known or the copy shader cannot be made
+(logged), the blur is drawn as the game draws it. **The `g_vFilter` variants probably carry the game's depth-of-field blur as well** (not verified in
+a run): with `MotionBlur=0` that goes too, in any scene that uses it. `Log=1` writes one `motion blur: pixel shader N (ps_3_0, n constants, with the
+g_vFilter taps) drawn as a plain copy` line for each blur shader (8 at most) a run draws, so the next log shows which variant the game really uses.
+The perf probe still counts the pass in its `motion-blur` phase (the classifier runs before the swap), so `[Perf]` shows what is left of it.
+
+**Checks.** `tools/motion_blur_check.py` links the whole mod and runs `MotionBlurPerEye` on a real Direct3D 9 device with a stand-in for the blur
+(a ps_3_0 and a ps_2_0 shader with the blur's constant table that paint red, each with the vertex shader of its model). With `MotionBlur=0` the target
+must equal the source texture with alpha forced to 1, pixel by pixel, from one draw; the stand-in, the tracking, `g_mMatrix` on the device and the
+game's scissor state must be as before; the copy shader of the right model must be made once, not every frame. With `MotionBlur=1`, or when the
+bound shader's handle is unknown, the stand-in is drawn once per eye (both halves red). Each of: the blur's shader not put back, alpha taken from the
+texture, the colour image read from sampler 1, the switch inverted, the wrong model's shader, no handle guard and a copy shader without its alpha
+constant makes the check fail (tried on copies of the source).
+
 **Shadow decals** (`ApplyShadowDecalForEye`). The decal PS rebuilds the pixel's camera-space position from depth and
 screen position: `q = (u*Z, v*Z, k, Z)`, `Z = 0.115/|depth|`, then multiplies by `g_ShadowPlaneSpaceMatrix` to get
 decal-plane coordinates. Per eye: `M_new = inv(B_e) * inv(C) * B_old * M_orig`, where `B(P)` (`ScreenZMapping`) maps a
@@ -318,14 +344,14 @@ in settings.xml (the other one was killed) takes it for the flat mode.  `tools/e
 The mod has three states. `Enabled` (1) is the master switch: 0 = the mod does nothing. `Stereo` (1, `[General]`) picks the half: 1 = VR, 0 = flat
 (SteamVR, the size override, the D3D9Ex device, the extra video mode, the head-frustum hook and every `[VR]` / `[Render]` setting are off; only `[Display]`
 and `[Input]` apply).  `LoadConfig` computes `g_cfg.vr = enabled && stereo`; VR-only code asks `g_cfg.vr`, not `g_cfg.enabled`, and the `[VR]` values that act without
-looking at `g_cfg.vr` (Bloom, NoLensFlare, the sizes) are forced to "as the game draws it" when flat.  A key that moved is still read from its old section
+looking at `g_cfg.vr` (Bloom, NoLensFlare, MotionBlur, the sizes) are forced to "as the game draws it" when flat.  A key that moved is still read from its old section
 where `ReadIniInt(..., oldSection)` says so: Stereo, ForceNoVSync, SharedTransport, DesktopView, DesktopPresentEvery, FitDesktopWindow from `[Render]`.
 `[General]` Enabled, Stereo, Log (0), AutoRecenter (1), RecenterKey (0x78 F9), ToggleKey (0x79 F10), ModeKey (0x77 F8), StartMode (0 auto /
 1 floating screen / 2 race), ThreadedInit, DeferVR.
 `[Display]` (VR and flat) ForceNoVSync (0; in VR V-Sync is always off, the headset paces the game).
 `[Input]` (VR and flat) KeyRepeatMs (60 ms; 0 = off): menu key repeat limiter, `input_limiter.cpp` (section 19).
 `[VR]` (ignored when flat) Api (`openvr`, the default, or `openxr`, section 27), OpenXRRuntime (the .json of an OpenXR runtime, empty = the system's active one), Resolution (WxH, 2160x1200; `CustomWidth`/`CustomHeight` of `[Render]` are read when it is missing), Bloom (100 %: the game's glow around
-menus, UI and loading screens; 0 = none), NoLensFlare (0; 1 drops the flare sprites and the bloom/glow around lights), SharedTransport (1, section 15),
+menus, UI and loading screens; 0 = none), NoLensFlare (0; 1 drops the flare sprites and the bloom/glow around lights), MotionBlur (1; 0 = the blur pass copies the picture, section 5), SharedTransport (1, section 15),
 DesktopView (off; left / right / both; 1 / 2 / 0 / 3 still read, section 20), DesktopPresentEvery (1, section 18), FitDesktopWindow (1), FpsCounter (0, section 28).
 `[Tracking]` Rotation, Position, PositionScale (game units per metre), IpdScale.
 `[Render]` (VR only) FovScale, SeamGutter (0); undocumented tuning: MainPassMinWidthFraction (0.9), RequireDepthBuffer, HalfResPasses, ReflectionLookupFix,
@@ -420,7 +446,7 @@ callback type; each module header lists what the module exports (with one-line c
 | `draw_dispatch` | Per-draw-call dispatch: decide how each game draw is handled and run it. | `ClassifyDraw`, `RunDraw` |
 | `hud` | HUD / UI layers: draw the game's 2D UI into off-screen layers and compose them into each eye as a world-locked panel. | `ComputeHudViewport`, `ReleaseHud`, `EnsureHudTargets`, `HudDrawCoversScreen`, `DrawHudToTexture`, `DrawHudToMultiplyLayer`, `DrawHudStencilOnly`, `OnGameStencilClear`, `ComposeHudLayers`, `IsMultiplicativeBlend` |
 | `streaks` | Light-streak sprites: captured in a layer and re-projected into each eye. | `ReleaseStreakLayer`, `EnsureStreakLayer`, `DrawStreakToLayer`, `FlushStreakLayer` |
-| `screen_space_passes` | Per-eye versions of the game's screen-space passes: motion blur, shadow decals, deferred lights, and the bloom blackout for `NoLensFlare`. | `DrawWithoutBloom`, `MotionBlurPerEye`, `ScreenZMapping`, `ApplyShadowDecalForEye`, `TransformPoint`, `TransformDirection`, `FindFarCornerRegister`, `DrawLightsPerEye`, `ApplyLightVolumeForEye` |
+| `screen_space_passes` | Per-eye versions of the game's screen-space passes: motion blur (or a plain copy of the picture with `MotionBlur=0`), shadow decals, deferred lights, and the bloom blackout for `NoLensFlare`. | `DrawWithoutBloom`, `MotionBlurPerEye`, `DrawMotionBlurAsCopy`, `ScreenZMapping`, `ApplyShadowDecalForEye`, `TransformPoint`, `TransformDirection`, `FindFarCornerRegister`, `DrawLightsPerEye`, `ApplyLightVolumeForEye` |
 | `device_hooks` | The IDirect3DDevice9 hooks: state tracking, shader tracking, draw interception, Present/Reset. | `H_Present`, `H_Reset`, `H_Clear`, `H_CreateTexture`, `H_SetRenderTarget`, `H_SetDepthStencilSurface`, `H_SetViewport`, `H_SetRenderState`, `H_SetScissorRect`, `H_SetTexture`, `H_CreateVertexShader`, `H_SetVertexShader`, `H_SetVertexShaderConstantF`, `H_CreatePixelShader`, `H_SetPixelShader`, `H_SetPixelShaderConstantF`, `H_DrawPrimitive`, `H_DrawIndexedPrimitive`, `H_DrawPrimitiveUP`, `H_DrawIndexedPrimitiveUP`, `HookDevice` |
 | `perf_probe` | Timing probe (section 13): GPU time per rendering phase from timestamp queries, CPU time of the draw hooks and the present path. | `PerfToggle`, `PerfSetPhase`, `PerfClassifyDraw`, `PerfFrameClose`, `PerfPoll`, `PerfScope`, `PerfDrawScope`, `PerfDriverScope` |
 | `lens_model` | Lens analysis (section 13): pixel need across the flat image, hidden area, focus/context layout costs. | `StartLensReportThread` |
