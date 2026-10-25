@@ -76,6 +76,7 @@ In VR the size is kept in `BlurVR.ini` (`[VR] Resolution=WxH`): the game starts 
 | **Num6** | 3D rear-view mirror on/off (same as `Mirror3D` in the ini) |
 | **Num7** | Timing probe on/off (see [Troubleshooting](#troubleshooting)) |
 | **Num8** | Save what the headset sees as picture files (see [Troubleshooting](#troubleshooting)) |
+| **Num9** | FPS counter on/off (same as `FpsCounter` in the ini) |
 
 ## Settings
 
@@ -150,6 +151,7 @@ Blur counts how long a key is held in frames and, after a second, repeats it eve
 | `DesktopView` | `off` | What the window on the desktop shows: `off` = no picture of the game at all: the window says "Playing in VR" with the game's logo (also in the menus and while loading) and is painted twice a second, which saves the GPU the copy of the game's picture. `left` = the left eye's view in a race (cropped to the window's shape and drawn at the window's own size, which is cheap), `right` = the right eye's, `both` = the whole side-by-side picture. The headset's picture is not affected. `off` needs a windowed game without multisampling (otherwise the window shows the left eye's view). Before 1.5 the default was `left`. |
 | `DesktopPresentEvery` | `1` | In a race, the window on the desktop (a mirror of the headset) really updates only every n-th frame (2-4 saves a little GPU time; 1 = every frame) |
 | `FitDesktopWindow` | `1` | 1 = the game's window is never made bigger than the work area of its monitor (at a 3840x2160 setting it would cover the whole desktop, or two monitors). The game still renders at the size it chose; the window shows one eye's view of it scaled to fit (`DesktopView`). Windowed mode only. 0 = as the game wants. |
+| `FpsCounter` | `0` | 1 = a small panel in the headset shows how many frames a second the game presents (in races and in the showroom; **Num9** switches it in game), with a graph of the last 18 seconds under it. It stays in front of your face, a little to the lower left, and is green at the headset's refresh rate, yellow below it and red far below (a game that SteamVR holds to half the headset's rate shows red; with `Api=openxr` it is white, the refresh rate is not known then). The line of the graph has the same colours and is scaled from the lowest to the highest rate of those seconds. Off by default |
 
 ### `[Render]`  (VR only)
 
@@ -197,6 +199,7 @@ The floating screen in menus.
 | `KeyMirror3D` | `0x66` (Num6) | Key for the 3D mirror switch |
 | `KeyPerf` | `0x67` (Num7) | Key for the timing probe switch |
 | `KeyDump` | `0x68` (Num8) | Key for saving the headset picture as files |
+| `KeyFps` | `0x69` (Num9) | Key for the FPS counter switch |
 | `AdjustViewRotation` | `1` | |
 
 ### `[Culling]`  (VR only)
@@ -273,6 +276,12 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **If OpenXR cannot start** (no 32-bit runtime, no headset, a failed session) the game stays on the monitor and `BlurVR.log` says why, in lines that start with `OpenXR:`. It does not switch to OpenVR by itself.
 - **Recentring is BlurVR's own with OpenXR:** F9 and the recentre at the start of every race set a reference pose in BlurVR, because OpenXR cannot ask the runtime to recentre. A recentre done in the runtime is followed too.
 
+**FPS counter**
+
+- **New, off by default: an FPS counter in the headset.** `[VR] FpsCounter=1` (or **Num9** in game) puts a small panel, `62 FPS`, in front of your face in races and in the showroom: the number of frames the game presents a second, refreshed twice a second. It is green when the game keeps up with the headset's refresh rate, yellow below it and red far below. Under it is a graph of the last 18 seconds (a point every quarter of a second), scaled from the lowest to the highest rate in them, with the line in the same colours. It is part of the picture sent to the headset (also in the window on the desktop with `DesktopView` left, right or both) and is not shown on loading screens or in videos, nor with `Stereo=0`.
+- **With `Api=openxr` the panel is white,** because BlurVR does not ask an OpenXR runtime for the headset's refresh rate, and green, yellow and red are measured against it. The figure and the graph are the same.
+- The figure has been seen working in the headset; the graph under it has so far only been checked without a headset.
+
 **Package**
 
 - The zip has two new files next to `openvr_api.dll`: `openxr_loader.dll` (the 32-bit OpenXR loader of the Khronos Group) and its license, `LICENSE_openxr.txt`. The loader is only used with `Api=openxr`; copy it too if you update by replacing single files.
@@ -280,7 +289,7 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 
 **Other**
 
-- The OpenXR headers are in `source\third_party\openxr`, the code is in `source\src\openxr_runtime.cpp` (`source\NOTES.md`, section 27), and `build.bat` and `build.sh` need nothing new. A new host check, `source\tools\openxr_check.py`, tests the loader and the runtime without the game (with `--system` it also starts the runtime and runs frames of a test picture in the headset).
+- The OpenXR headers are in `source\third_party\openxr`, the code is in `source\src\openxr_runtime.cpp` (`source\NOTES.md`, section 27), and `build.bat` and `build.sh` need nothing new. New host checks in `source\tools`: `openxr_check.py` tests the loader and the runtime without the game (with `--system` it also starts the runtime and runs frames of a test picture in the headset), and `fps_counter_check.py` checks the FPS counter (counting, colours, the panel on a real Direct3D 9 device).
 
 ### Version 1.5
 

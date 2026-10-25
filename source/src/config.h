@@ -61,6 +61,8 @@ struct Config {
     int perfEnabled = 0;  // [Perf] Enabled: log GPU and CPU frame timing once a second (perf_probe.cpp); the key below flips it live
     int keyPerf = 0x67;   // numpad 7
     int keyDump = 0x68;   // [Debug] KeyDump, numpad 8: save the picture sent to the headset and the UI layers as .bmp files (frame_dump.cpp)
+    int fpsCounter = 0;   // [VR] FpsCounter: 1 = a small panel in the headset shows the frames a second the game presents (fps_counter.cpp); the key below flips it live
+    int keyFps = 0x69;    // [Debug] KeyFps, numpad 9
     int sharedTransport = 1; // [VR] SharedTransport (VR only, on by default; falls back to the CPU copy by itself if it cannot work): 1 = run the game on a Direct3D 9Ex device and hand the finished frame to SteamVR as a shared texture (no read back through the CPU)
     int startAtSavedSize = 0; // VR only (set by LoadConfig): a windowed start that Windows clamped to the desktop gets the start size as its back buffer (display_modes.cpp, window_spoof.cpp)
     int startWidth = 0, startHeight = 0; // VR only (set by LoadConfig): the size the start should have, the VR resolution

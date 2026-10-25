@@ -157,6 +157,8 @@ void LoadConfig()
     g_cfg.perfEnabled = ReadIniInt("Perf", "Enabled", 0);
     g_cfg.keyPerf = ReadIniInt("Debug", "KeyPerf", 0x67);
     g_cfg.keyDump = ReadIniInt("Debug", "KeyDump", 0x68);
+    g_cfg.keyFps = ReadIniInt("Debug", "KeyFps", 0x69);
+    g_cfg.fpsCounter = g_cfg.vr ? ReadIniInt("VR", "FpsCounter", 0) : 0; // (it is drawn into the headset's picture: flat, there is none)
     g_cfg.coverageEvery = ReadIniInt("Hud", "CoverageEvery", 8);
     g_cfg.desktopPresentEvery = ReadIniInt("VR", "DesktopPresentEvery", 1, "Render");
     g_cfg.desktopView = ReadIniDesktopView("VR", "DesktopView", kDesktopViewOff, "Render");
