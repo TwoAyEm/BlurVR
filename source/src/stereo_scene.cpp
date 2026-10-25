@@ -4,6 +4,7 @@
 #include "config.h"
 #include "d3d_hooks.h"
 #include "device_state.h"
+#include "game_camera.h"
 #include "render_state.h"
 #include "shader_tracking.h"
 #include "vr_runtime.h"
@@ -211,10 +212,14 @@ void ApplyEyeConstants(IDirect3DDevice9* device, int eye)
                               view.m[0][2] * (view.m[1][0] * view.m[2][1] - view.m[1][1] * view.m[2][0]);
             break;
         }
-        if (flipMode < 0)
-            flipMode = (viewDeterminant > 0) ? 1 : 0;
+        if (flipMode < 0) {
+            int axis = ReflectionFlipAxis(); // the axis the game's own reflection camera has turned round, seen by the hooks of game_camera.cpp
+            flipMode = axis >= 0 ? axis + 1 : ((viewDeterminant > 0) ? 1 : 0);
+        }
+        // The reflection is drawn as if the head looked straight ahead (only its yaw kept, the eyes where they are): the game lays a fixed band of ground haze below the horizon of its
+        // own camera over the reflection, so a pitched reflection ran into it (the far water looked up into the dark band as the head nodded).
+        flippedDelta = YawOnlyDelta(*delta);
         if (flipMode > 0) {
-            flippedDelta = *delta;
             int flipAxis = flipMode - 1;
             for (int i = 0; i < 4; i++)
                 for (int j = 0; j < 4; j++) {
@@ -225,9 +230,9 @@ void ApplyEyeConstants(IDirect3DDevice9* device, int eye)
                         sign = -sign;
                     flippedDelta.m[i][j] *= sign;
                 }
-            delta = &flippedDelta;
             flipSlot = flipMode > 3 ? 0 : flipMode;
         }
+        delta = &flippedDelta;
     }
     if (eye < 2 && g_matrixLayout) {
         for (const TrackedConstant& tracked : g_currentVsInfo->tracked) {
@@ -502,6 +507,25 @@ static bool IsRigid(const Matrix4& view)
     return fabs(view.m[3][3] - 1.0) < 1e-3;
 }
 
+// The camera of a view-projection that is given by its x, y and w columns only (a pixel shader declares the columns it uses; the z column of the game's copy is
+// not always the one that goes with the others).  The x and y scales of the projection are read from the columns themselves, so a projection with another field
+// of view than the one the mod tracks is no trouble: column x is a * (the camera's x axis), column y is b * (its y axis) and column w is its z axis.  False when
+// they are not the columns of a camera followed by a perspective projection.
+static bool ViewFromProjectionColumns(const Matrix4& columns, Matrix4& view)
+{
+    double a = sqrt(columns.m[0][0] * columns.m[0][0] + columns.m[1][0] * columns.m[1][0] + columns.m[2][0] * columns.m[2][0]);
+    double b = sqrt(columns.m[0][1] * columns.m[0][1] + columns.m[1][1] * columns.m[1][1] + columns.m[2][1] * columns.m[2][1]);
+    if (!(a > 1e-6) || !(b > 1e-6))
+        return false;
+    view = Identity();
+    for (int i = 0; i < 4; i++) {
+        view.m[i][0] = columns.m[i][0] / a;
+        view.m[i][1] = columns.m[i][1] / b;
+        view.m[i][2] = columns.m[i][3];
+    }
+    return IsRigid(view);
+}
+
 bool ApplyEyePixelConstants(IDirect3DDevice9* device, int eye)
 {
     const PixelShaderInfo* ps = g_currentPsInfo;
@@ -518,15 +542,11 @@ bool ApplyEyePixelConstants(IDirect3DDevice9* device, int eye)
         StorePixelColumns(Multiply(view, delta), ps->viewMatrixBase, ps->viewMatrixUsed, setConstants, device);
         wrote = true;
     }
-    Matrix4 viewProj;
-    const Matrix4* gameProjectionInverse = GameProjectionInverse();
-    if (gameProjectionInverse && LoadPixelColumns(ps->viewProjBase, viewProj) &&
-        IsRigid(Multiply(viewProj, *gameProjectionInverse))) {
+    Matrix4 viewProj, viewFromColumns;
+    if (LoadPixelColumns(ps->viewProjBase, viewProj) && ViewFromProjectionColumns(viewProj, viewFromColumns)) {
         // (water: a reflected point projected to the screen to look up the scene picture, which is the eye's half)
         const EyeBox& box = (eye == 2) ? g_vr.unionBox : g_vr.eyeBox[eye];
-        const EyeRewrite& rewrite = GetRewrite(eye, 0, box, delta, *gameProjectionInverse);
-        StorePixelColumns(Multiply(viewProj, rewrite.clipRemap), ps->viewProjBase, ps->viewProjUsed, setConstants,
-                          device);
+        StorePixelColumns(Multiply(Multiply(viewFromColumns, delta), BuildEyeProjection(box, eye)), ps->viewProjBase, ps->viewProjUsed, setConstants, device);
         wrote = true;
     }
     double offset[3];

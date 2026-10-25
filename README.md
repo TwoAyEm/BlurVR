@@ -199,7 +199,7 @@ The floating screen in menus.
 
 ### `[Culling]`  (VR only)
 
-The game decides what to draw from a view frustum around your head (both eyes' field of view, the way you look) instead of from its own, narrower camera. BlurVR finds the game's camera code in the running `Blur.exe` and checks that its data is laid out as expected; if not, the game is left alone and `BlurVR.log` says why (`game camera: ...` and `head frustum: ...` lines). Tried so far: the Steam build and a non-Steam build. The markers over the AI cars use the same hooks, so they stay on the HUD panel when the code is not found.
+The game decides what to draw from a view frustum around your head (both eyes' field of view, the way you look) instead of from its own, narrower camera. BlurVR finds the game's camera code in the running `Blur.exe` and checks that its data is laid out as expected; if not, the game is left alone and `BlurVR.log` says why (`game camera: ...` and `head frustum: ...` lines). Tried so far: the Steam build and a non-Steam build. The markers over the AI cars and the water's reflection use the same hooks, so the markers stay on the HUD panel and the reflection is culled by the game's own camera when the code is not found.
 
 | Key | Default | What it does |
 |---|---|---|
@@ -232,7 +232,7 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 
 ## Known limitations
 
-- The rear-view mirror and the planar reflections still decide what to draw with the game's own cameras.
+- The rear-view mirror still decides what to draw with the game's own camera.
 - HUD detection is heuristic (worked out from how the game draws), so an unusual screen can show UI pieces in the wrong place.
 - Menus are the game image on a flat screen; use mouse/keyboard/controller as normal.
 - The markers over the AI cars were tried on the Steam build and on a non-Steam build; with another build of the game they may stay on the HUD panel. A popup in the middle of the screen can take a piece of itself along with a marker, and a lock-on reticle or rival arrow further from the marker than its picture reaches is cut off.
@@ -241,7 +241,7 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 
 ## Troubleshooting
 
-- **The view is still culled at the edges / looking away from the direction of travel:** set `Log=1` under `[General]`, start a race for a minute, and look in `BlurVR.log` for the lines that start with `game camera:` and `head frustum:`. They say whether the game's camera code was found in your `Blur.exe`, whether its data is laid out as expected, and how many frustums were replaced. If they say it was not found, send `BlurVR.log` and the size and date of your `Blur.exe`.
+- **The view is still culled at the edges / looking away from the direction of travel:** set `Log=1` under `[General]`, start a race for a minute, and look in `BlurVR.log` for the lines that start with `game camera:` and `head frustum:` (the water's reflection has `reflection frustum:` lines of its own). They say whether the game's camera code was found in your `Blur.exe`, whether its data is laid out as expected, and how many frustums were replaced. If they say it was not found, send `BlurVR.log` and the size and date of your `Blur.exe`.
 - **The markers over the AI cars stay on the HUD panel:** they need `Stereo=1` and the game's camera code to be found. With `Log=1` the `game camera:` and `ai hud:` lines in `BlurVR.log` say whether the game's code was found and why a check failed; send the log and the size and date of your `Blur.exe`.
 - **Nothing happens / the game is flat:** start SteamVR first; run `uninstall.bat` to go back to the plain game.
 - **Something looks wrong in the headset:** press **Num8** while it is on screen. BlurVR saves `BlurVR_dump_<time>_picture_*.bmp` (the whole side-by-side picture, large files) and one file per HUD layer in the BlurVR folder: attach them to the report.
@@ -258,6 +258,10 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 
 - **The markers over the AI cars sit over their cars.** The game puts a marker (name, race position, weapon, health, the lock-on reticle) over every AI car, but BlurVR draws all of the game's 2D UI on one flat panel, so with your head turned the markers stayed on the panel instead of over the cars. Now each marker is cut out of the UI and drawn over its car in both eyes, at the car's distance (so it has the car's depth), whichever way you look. Close up it has its real size; far away it is never smaller than a few degrees, so it stays readable. Like in the flat game, a marker is never hidden behind anything.
 - **The markers go to the cars nearest to where you look.** The game gives its five markers to the cars nearest the player's car, wherever you are looking. Now they go to the five nearest your head within 80 degrees of where you look, so looking out of the side window marks the cars beside you.
+- **Water reflections follow your head.** The game draws the reflection in water (LA River and other levels) from a camera of its own with a narrow view cone that did not turn with your head, so with your head turned the reflection lost whole objects (the sky showed where a wall should be, with a straight edge between them) and seemed to slide as you looked around. It is now drawn for what both eyes see, and each eye's mirror image sits where it should (the two eyes were swapped in the reflection before).
+- **The reflection is drawn level, like the game draws it.** The game lays a band of dark ground haze under the horizon of its own (level) camera over the reflection, so when you nodded down the far water looked up into that band and lost its reflection (the far bank and the signs on it). The reflection is now drawn as if you looked straight ahead, turned only to the way you face, so nodding or tilting your head no longer changes it.
+- **The water at the docks follows your head too.** It reflects the scene picture on the screen instead, and the point it reflects was never moved to your eye. As in the flat game it shows the funnel of the ship and not its hull.
+- A level with a lot of water costs a little more frame time, because the reflection is now drawn for everything both eyes see.
 - **The HUD no longer sways with the car's acceleration** in the headset (the game moves, scales and turns the whole HUD with it, which would shift the markers). It stays at rest.
 - The markers have no settings and run only in VR (`Stereo=1`). BlurVR finds the game's code for them by what it looks like, as for the camera in 1.3 (tried so far: the Steam build and a non-Steam build), and checks it before it changes anything; if something is not as expected the markers stay on the HUD panel as in 1.4, and `BlurVR.log` says why (`ai hud: ...` lines).
 
@@ -273,7 +277,7 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 **Other**
 
 - **The flat display mode is put back when the game exits.** In 1.4 this only happened at the next start: Blur ends with `TerminateProcess`, which skipped BlurVR's exit code, so after every VR run `settings.xml` still held the VR size and `BlurVR.log` began with "the last VR run did not end properly". BlurVR now hooks that call and restores the flat size first (a game that is killed from outside is still repaired at the next start).
-- Building from source needs `-lgdi32` (the message window is drawn with GDI); `build.bat` and `build.sh` have it. New host checks in `source\tools`: `ai_hud_check.py` and `desktop_message_check.py`.
+- Building from source needs `-lgdi32` (the message window is drawn with GDI); `build.bat` and `build.sh` have it. New host checks in `source\tools`: `ai_hud_check.py`, `desktop_message_check.py`, `exit_restore_check.py` and `reflection_cull_check.py`.
 
 ### Version 1.4
 

@@ -17,5 +17,9 @@ struct MainCameraPose {
 };
 // A consistent copy of the pose (the hooks run on the game's thread).  False until a main camera has been seen.
 bool GetMainCameraPose(MainCameraPose& out);
+// The axis (0 right, 1 up, 2 forward) that the game's planar reflection camera of this frame has turned round against the main camera, as the hooks
+// found it when the reflection view was given its camera; -1 when no reflection camera was seen lately or the hooks are not installed.  The reflection
+// pass is drawn with the head's delta conjugated by that flip (stereo_scene.cpp) and culled with a frustum made the same way.
+int ReflectionFlipAxis();
 // What the hook does with each main camera it sees (and what a test does to give the pose).
 void PublishMainCameraPose(const MainCameraPose& pose);

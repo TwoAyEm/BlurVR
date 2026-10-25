@@ -22,7 +22,7 @@ struct Config {
     int matrixLayoutOverride = 0; // 0 auto, 1 row (X=A), 2 transposed (X=A^T)
     double hudXOffset = 0.0;      // extra inward (convergence) shift per eye, fraction of eye width
     int reflectionFlipMode =
-        -1; // reflection-pass delta: -1 auto(by view determinant), 0 none, 1 conj Y, 2 conj X, 3 conj Z
+        -1; // reflection-pass delta: -1 auto (the axis the game's reflection camera has turned round, else by the view determinant), 0 none, 1 conj X, 2 conj Y, 3 conj Z
     int skipLensFlares = 0; // [VR] NoLensFlare: drop lens flares: the flare sprites (rear-view mirror) and the bloom/glow around lights
     int fixReflectionLookup =
         1;                // adjust g_ReflectionViewMatrix (reflection-texture lookup) per eye like the reflection pass

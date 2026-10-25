@@ -125,6 +125,65 @@ bool TryRecoverProjection(const float* registers)
     return true;
 }
 
+int MirrorFlipAxis(const double mirrored[3][3], const double camera[3][3])
+{
+    int flipped = -1, negatives = 0;
+    for (int k = 0; k < 3; k++) {
+        const double reflection[3] = {camera[k][0], -camera[k][1], camera[k][2]}; // the camera's axis in the mirror
+        double dot = mirrored[k][0] * reflection[0] + mirrored[k][1] * reflection[1] + mirrored[k][2] * reflection[2];
+        if (fabs(dot) < 0.9)
+            return -1;
+        if (dot < 0) {
+            negatives++;
+            flipped = k;
+        }
+    }
+    return negatives == 1 ? flipped : -1;
+}
+
+Matrix4 FlipConjugate(const Matrix4& delta, int axis)
+{
+    Matrix4 out = delta;
+    if (axis < 0 || axis > 2)
+        return out;
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++) {
+            double sign = 1;
+            if (i == axis)
+                sign = -sign;
+            if (j == axis)
+                sign = -sign;
+            out.m[i][j] *= sign;
+        }
+    return out;
+}
+
+Matrix4 YawOnlyDelta(const Matrix4& delta)
+{
+    // where the eye is in camera space: p * delta = 0 for its origin p, i.e. p = -t * transpose(R)
+    double origin[3];
+    for (int k = 0; k < 3; k++)
+        origin[k] = -(delta.m[3][0] * delta.m[k][0] + delta.m[3][1] * delta.m[k][1] + delta.m[3][2] * delta.m[k][2]);
+    // where it looks: its z axis is the third column of R
+    double forwardX = delta.m[0][2], forwardZ = delta.m[2][2];
+    double length = sqrt(forwardX * forwardX + forwardZ * forwardZ);
+    double c = 1, s = 0;
+    if (length > 1e-6) { // (looking straight up or down: no direction to keep)
+        c = forwardZ / length;
+        s = forwardX / length;
+    }
+    Matrix4 out = Identity();
+    // the columns of R are the eye's axes in camera space: x = (c, 0, -s), y = (0, 1, 0), z = (s, 0, c)
+    out.m[0][0] = c;
+    out.m[2][0] = -s;
+    out.m[1][1] = 1;
+    out.m[0][2] = s;
+    out.m[2][2] = c;
+    for (int j = 0; j < 3; j++)
+        out.m[3][j] = -(origin[0] * out.m[0][j] + origin[1] * out.m[1][j] + origin[2] * out.m[2][j]);
+    return out;
+}
+
 Matrix4 BuildEyeProjection(const EyeBox& box, int eye)
 {
     Matrix4 proj;

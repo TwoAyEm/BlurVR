@@ -38,6 +38,8 @@ struct CameraSnapshot {
     const void* data = NULL; // the struct itself (identifies the camera from call to call)
     bool valid = false;      // looks like camera data
     bool isMain = false;     // and is the camera the player sees
+    double mirrorDepth = 0;  // (for the log) how far under the main camera it is
+    int mirrorAxis = -1;     // not the main camera but its mirror in a planar reflection: the axis it turns round (MirrorFlipAxis), else -1
     double pos[3] = {0, 0, 0}, right[3] = {1, 0, 0}, up[3] = {0, 1, 0}, fwd[3] = {0, 0, 1};
     double nearDist = 0.1, farDist = 1000, fov = 1, aspect = 1;
     double projX = 1, projY = 1; // P[0][0], P[1][1] (cot of the half angles)
@@ -73,6 +75,83 @@ bool SnapshotFromCameraData(const float* t, CameraSnapshot& out)
     out.projX = t[0xC0 / 4];
     out.projY = t[(0xC0 + 0x14) / 4];
     return out.nearDist > 0 && out.farDist > out.nearDist && out.farDist < 1e6;
+}
+
+// The camera a frustum description belongs to: ComputeCullPlanes backwards, for a symmetric frustum with no head and no margin.  The planar reflection view is given
+// its frustum (SetCamera, Blur.exe 0x4279ED) before its camera data (SetCameraData, 0x4279FE), so at the time of the first call the description is all there is
+// of this frame's reflection camera.  The apex is where the left, right and bottom planes meet, the axes come from the plane normals (left minus right is the x
+// axis, bottom minus top the y axis, the forward plane's normal the z axis) and the field of view from their slopes.  False when the planes are not such a frustum.
+bool SnapshotFromDescription(const float* d, CameraSnapshot& out)
+{
+    int planesInUse;
+    memcpy(&planesInUse, d, 4);
+    if (planesInUse != 6)
+        return false;
+    double n[7][3], dist[7];
+    static const int offsets[7] = {0x30, 0x40, 0x50, 0x60, 0x10, 0x70, 0x80}; // left, right, bottom, top, forward, far, near
+    for (int k = 0; k < 7; k++)
+        for (int i = 0; i < 4; i++) {
+            float v = d[offsets[k] / 4 + i];
+            if (!std::isfinite(v) || fabsf(v) > 1e7f)
+                return false;
+            if (i < 3)
+                n[k][i] = v;
+            else
+                dist[k] = v;
+        }
+    for (int k = 0; k < 7; k++)
+        if (fabs(Dot3(n[k], n[k]) - 1) > 0.02)
+            return false;
+    double r[3], u[3], f[3] = {n[4][0], n[4][1], n[4][2]};
+    for (int i = 0; i < 3; i++) {
+        r[i] = n[0][i] - n[1][i];
+        u[i] = n[2][i] - n[3][i];
+    }
+    double rl = sqrt(Dot3(r, r)), ul = sqrt(Dot3(u, u));
+    if (rl < 1e-3 || ul < 1e-3)
+        return false;
+    for (int i = 0; i < 3; i++) {
+        r[i] /= rl;
+        u[i] /= ul;
+    }
+    if (fabs(Dot3(r, u)) > 0.02 || fabs(Dot3(r, f)) > 0.02 || fabs(Dot3(u, f)) > 0.02)
+        return false;
+    double tanH = Dot3(n[0], f) / Dot3(n[0], r), tanV = Dot3(n[2], f) / Dot3(n[2], u);
+    if (!(tanH > 0.05 && tanH < 20 && tanV > 0.05 && tanV < 20))
+        return false;
+    // the apex: left, right and bottom planes meet there (Cramer's rule)
+    const double* a = n[0];
+    const double* b = n[1];
+    const double* c = n[2];
+    double rhs[3] = {-dist[0], -dist[1], -dist[2]};
+    double det = a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
+    if (fabs(det) < 1e-6)
+        return false;
+    double pos[3];
+    for (int axis = 0; axis < 3; axis++) {
+        double m[3][3];
+        for (int row = 0; row < 3; row++) {
+            const double* source = row == 0 ? a : (row == 1 ? b : c);
+            for (int col = 0; col < 3; col++)
+                m[row][col] = (col == axis) ? rhs[row] : source[col];
+        }
+        pos[axis] = (m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])) / det;
+    }
+    double tolerance = 0.05 + 1e-4 * fmax(fabs(pos[0]), fmax(fabs(pos[1]), fabs(pos[2])));
+    if (!std::isfinite(pos[0]) || !std::isfinite(pos[1]) || !std::isfinite(pos[2]) || fabs(Dot3(n[3], pos) + dist[3]) > tolerance || fabs(Dot3(f, pos) + dist[4]) > tolerance)
+        return false;
+    for (int i = 0; i < 3; i++) {
+        out.right[i] = r[i];
+        out.up[i] = u[i];
+        out.fwd[i] = f[i];
+        out.pos[i] = pos[i];
+    }
+    out.fov = 2 * atan(tanV);
+    out.aspect = tanH / tanV;
+    out.nearDist = -dist[6] - Dot3(f, pos);
+    out.farDist = dist[5] - Dot3(f, pos);
+    out.valid = out.nearDist > 0 && out.farDist > out.nearDist && out.farDist < 1e6;
+    return out.valid;
 }
 
 struct CullPlanes {
@@ -272,7 +351,7 @@ bool LooksLikeMainCamera(const CameraSnapshot& cam)
 }
 
 struct Counters {
-    unsigned dataCalls, dataValid, dataMain, cameraCalls, rewrites, layoutFailures;
+    unsigned dataCalls, dataValid, dataMain, cameraCalls, rewrites, layoutFailures, reflectionViews, reflectionRewrites, reflectionLayoutFailures;
 } g_counters;
 
 // The pose of the main camera, published for other modules (ai_hud.cpp).  A sequence lock: the writer is the game's thread, the readers are
@@ -310,6 +389,73 @@ unsigned g_layoutNext = 0;
 bool HeadFrustumWanted()
 {
     return g_vr.active && g_vr.poseValid && IsRaceMode();
+}
+
+// The planar reflection (water, wet roads): the game gives its own view a camera that is the main camera mirrored in a horizontal plane under it, with the
+// position and the forward axis mirrored and the up axis turned round (so that the rotation stays proper), and a wider field of view.  That view is drawn
+// per eye like the main one (stereo_scene.cpp) but culled with the game's own frustum around that one mirrored camera, so with the head turned the water
+// showed the sky where a wall should be, with a straight edge where the frustum ends.  Seen from the main camera's pose (the last one published) it is
+// recognised by its axes, and the culling is done around the mirrored head.
+int g_reflectionAxis = -1;
+unsigned long long g_reflectionAxisFrame = 0;
+
+int ReflectionAxisOf(const CameraSnapshot& cam)
+{
+    MainCameraPose main;
+    if (!GetMainCameraPose(main) || g_vr.frameCount > main.frame + 3)
+        return -1;
+    if (cam.pos[1] > main.pos[1] - 0.3 || fabs(cam.pos[0] - main.pos[0]) > 15 || fabs(cam.pos[2] - main.pos[2]) > 15)
+        return -1; // (the mirror image is straight under the camera, the water under the car)
+    const double mirrored[3][3] = {{cam.right[0], cam.right[1], cam.right[2]}, {cam.up[0], cam.up[1], cam.up[2]}, {cam.fwd[0], cam.fwd[1], cam.fwd[2]}};
+    const double camera[3][3] = {{main.right[0], main.right[1], main.right[2]}, {main.up[0], main.up[1], main.up[2]}, {main.fwd[0], main.fwd[1], main.fwd[2]}};
+    return MirrorFlipAxis(mirrored, camera);
+}
+
+// The description for the reflection view's SetCamera: a frustum around the mirrored head.  The reflection pass draws each eye through the mirrored eye
+// camera (the head's delta conjugated by the flip, stereo_scene.cpp), so the frustum is the one ComputeCullPlanes gives for the reflection camera with the
+// conjugated deltas.
+const void* ReflectionCameraForCulling(const CameraSnapshot& cam, const void* camera, BYTE* scratch)
+{
+    static unsigned uses = 0, failures = 0;
+    if (!HeadFrustumWanted() || cam.mirrorAxis < 0)
+        return camera;
+    LayoutRecord* record = NULL;
+    for (LayoutRecord& r : g_layouts)
+        if (r.description == camera)
+            record = &r;
+    if (!record) {
+        LayoutCheck check = CheckFrustumLayout(cam, (const float*)camera);
+        record = &g_layouts[g_layoutNext++ % 8];
+        record->description = camera;
+        record->ok = check.ok;
+        if (check.ok)
+            Log("reflection frustum: layout verified against the game's own planes (largest difference %.1e), description %p", check.worstError, camera);
+        else {
+            g_counters.reflectionLayoutFailures++;
+            Log("reflection frustum: the layout of the reflection camera is not the expected one (%s; largest difference %.3g at +0x%x of the description %p), the "
+                "game culls the reflection with its own frustum",
+                check.reason, check.worstError, check.worstOffset < 0 ? 0 : check.worstOffset, camera);
+        }
+    }
+    if (!record->ok)
+        return camera;
+    const int axis = cam.mirrorAxis;
+    Matrix4 head = FlipConjugate(YawOnlyDelta(g_vr.eyeCameraDelta[2]), axis),
+            eyes[2] = {FlipConjugate(YawOnlyDelta(g_vr.eyeCameraDelta[0]), axis), FlipConjugate(YawOnlyDelta(g_vr.eyeCameraDelta[1]), axis)}; // (what the pass is drawn with, stereo_scene.cpp)
+    CullSettings settings = {g_cfg.cullMarginDeg, g_cfg.cullPullBack};
+    CullPlanes planes;
+    if (!ComputeCullPlanes(cam, head, eyes, g_vr.eyeBox, settings, planes)) {
+        if (failures++ < 5)
+            Log("reflection frustum: could not be worked out from the mirrored head pose, the game's own frustum is used");
+        return camera;
+    }
+    memcpy(scratch, camera, g_cameraBytes);
+    WriteCullPlanes((float*)scratch, planes);
+    g_counters.reflectionRewrites++;
+    if (uses++ < 3 || uses % 3000 == 0)
+        Log("reflection frustum (use %u): mirrored camera turned round in axis %c, %.1f m under the main camera, head %.1f deg off it, tangents x %.3f..%.3f y %.3f..%.3f", uses,
+            "XYZ"[axis], cam.mirrorDepth, planes.yawDeg, planes.tangents[0], planes.tangents[1], planes.tangents[2], planes.tangents[3]);
+    return scratch;
 }
 
 // The camera description for a main-camera SetCamera call: the game's own unless the VR half is running, the layout is the expected one
@@ -389,6 +535,22 @@ void __attribute__((fastcall)) H_SetCamera(void* self, void* edx, const void* ca
     if (g_snapshot.valid && g_snapshot.isMain && g_snapshot.view == self) {
         alignas(16) static BYTE scratch[kScratchSize]; // (the callee copies it at once; the game's render thread is the only caller)
         camera = CameraForCulling(self, camera, scratch);
+    } else if (HeadFrustumWanted()) {
+        // a view that is given its frustum before its camera data, or any other view: is it the planar reflection?  (a mirror of the main camera, found from the frustum alone)
+        CameraSnapshot candidate;
+        if (SnapshotFromDescription((const float*)camera, candidate)) {
+            candidate.mirrorAxis = ReflectionAxisOf(candidate);
+            if (candidate.mirrorAxis >= 0) {
+                MainCameraPose pose;
+                if (GetMainCameraPose(pose))
+                    candidate.mirrorDepth = pose.pos[1] - candidate.pos[1];
+                g_reflectionAxis = candidate.mirrorAxis;
+                g_reflectionAxisFrame = g_vr.frameCount;
+                g_counters.reflectionViews++;
+                alignas(16) static BYTE scratch[kScratchSize];
+                camera = ReflectionCameraForCulling(candidate, camera, scratch);
+            }
+        }
     }
     g_snapshot.valid = false; // the snapshot is for the SetCamera that follows its SetCameraData, nothing else
     g_origSetCamera(self, edx, camera, flag);
@@ -443,6 +605,11 @@ bool GetMainCameraPose(MainCameraPose& out)
     return false;
 }
 
+int ReflectionFlipAxis()
+{
+    return (g_reflectionAxis >= 0 && g_vr.frameCount <= g_reflectionAxisFrame + 2) ? g_reflectionAxis : -1;
+}
+
 void GameCameraPoll()
 {
     static unsigned frame = 0, tries = 0, nextTry = 1, reports = 0;
@@ -450,8 +617,9 @@ void GameCameraPoll()
     if (g_hooked) { // a line now and then saying what the hooks saw: on another build this is what shows whether the camera is recognised
         if ((frame == 600 || frame % 12000 == 0) && reports++ < 6)
             Log("game camera: %u SetCameraData calls (%u looked like camera data, %u taken for the main camera), %u SetCamera calls, %u frustums "
-                "rewritten, %u layout failures",
-                g_counters.dataCalls, g_counters.dataValid, g_counters.dataMain, g_counters.cameraCalls, g_counters.rewrites, g_counters.layoutFailures);
+                "rewritten, %u layout failures; reflection cameras seen %u, their frustums rewritten %u, layout failures %u",
+                g_counters.dataCalls, g_counters.dataValid, g_counters.dataMain, g_counters.cameraCalls, g_counters.rewrites, g_counters.layoutFailures,
+                g_counters.reflectionViews, g_counters.reflectionRewrites, g_counters.reflectionLayoutFailures);
         return;
     }
     if (!g_cfg.vr || tries >= 5 || frame < nextTry)
