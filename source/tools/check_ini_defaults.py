@@ -21,9 +21,9 @@ DEFAULT_INI = os.path.join(HERE, '..', 'release', 'BlurVR.ini')
 def code_defaults(path):
     text = open(path, encoding='utf-8').read()
     found = {}
-    # ReadIniInt / ReadIniDouble / ReadIniDesktopView("Section", "Key", default[, "OldSection"]): the third argument is the default, the optional
-    # fourth the section an older ini kept the key in (still read, not a place for a new ini to use)
-    for m in re.finditer(r'ReadIni(?:Int|Double|DesktopView)\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*([^,)]+?)\s*[,)]', text):
+    # ReadIniInt / ReadIniDouble / ReadIniDesktopView / ReadIniApi / ReadIniString("Section", "Key", default[, "OldSection"]): the third argument is the
+    # default, the optional fourth the section an older ini kept the key in (still read, not a place for a new ini to use)
+    for m in re.finditer(r'ReadIni(?:Int|Double|DesktopView|Api|String)\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*([^,)]+?)\s*[,)]', text):
         found[(m.group(1).lower(), m.group(2).lower())] = m.group(3)
     # ReadIniSize("VR", "Resolution", &w, &h): written WxH, the default is what g_cfg.vrWidth / vrHeight are set to just before
     width = re.search(r'vrWidth\s*=\s*(\d+)\s*;', text)
@@ -39,7 +39,8 @@ def code_defaults(path):
 def number(text):
     text = text.strip().strip('"')
     # DesktopView is written left / right / both / off (the numbers 1 / 2 / 0 / 3 of older files are read too); a size is written WxH
-    text = {'left': '1', 'right': '2', 'both': '0', 'off': '3', 'kdesktopviewoff': '3'}.get(text.lower(), text)
+    text = {'left': '1', 'right': '2', 'both': '0', 'off': '3', 'kdesktopviewoff': '3', 'openvr': '0', 'openxr': '1', 'kvrapiopenvr': '0',
+            'kvrapiopenxr': '1'}.get(text.lower(), text)
     text = re.sub(r'\s*[xX]\s*', 'x', text) if re.fullmatch(r'\d+\s*[xX]\s*\d+', text) else text
     try:
         return float(int(text, 0))

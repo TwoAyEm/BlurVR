@@ -12,7 +12,8 @@ import sys
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EXPECTED = {'BlurVR.ini', 'LICENSE_openvr.txt', 'README.md', 'd3d9.dll', 'install.bat', 'openvr_api.dll', 'uninstall.bat'}
+EXPECTED = {'BlurVR.ini', 'LICENSE_openvr.txt', 'LICENSE_openxr.txt', 'README.md', 'd3d9.dll', 'install.bat', 'openvr_api.dll', 'openxr_loader.dll',
+            'uninstall.bat'}
 SOURCE_EXT = {'.cpp', '.c', '.h', '.hpp', '.py', '.def', '.md', '.patch', '.sh', '.clang-format', '.obj', '.lib', '.pdb'}
 
 
@@ -41,6 +42,12 @@ def main():
             pe = struct.unpack_from('<I', dll, 0x3C)[0]
             if dll[:2] != b'MZ' or dll[pe:pe + 4] != b'PE\0\0' or struct.unpack_from('<H', dll, pe + 4)[0] != 0x14C:
                 problems.append('d3d9.dll is not a 32-bit (x86) Windows DLL')
+        for name in ('openvr_api.dll', 'openxr_loader.dll'): # the game is 32-bit: a 64-bit copy of either cannot be loaded into it
+            if 'BlurVR/' + name in names:
+                dll = z.read('BlurVR/' + name)
+                pe = struct.unpack_from('<I', dll, 0x3C)[0]
+                if dll[:2] != b'MZ' or dll[pe:pe + 4] != b'PE\0\0' or struct.unpack_from('<H', dll, pe + 4)[0] != 0x14C:
+                    problems.append(name + ' is not a 32-bit (x86) Windows DLL')
     version = re.search(r'#define\s+BLURVR_VERSION\s+"([^"]+)"', open(os.path.join(HERE, '..', 'src', 'core.h')).read()).group(1)
     if os.path.basename(path) != 'BlurVR-%s.zip' % version:
         problems.append('the zip is named %s but the version in core.h is %s' % (os.path.basename(path), version))

@@ -1,6 +1,6 @@
-# BlurVR 1.5
+# BlurVR 1.6
 
-**Seated VR for Blur (SteamVR / OpenVR).**
+**Seated VR for Blur (SteamVR / OpenVR, or OpenXR).**
 
 Play Blur in a headset, seated. Built and tested with a Valve Index; any SteamVR headset should work.
 
@@ -9,7 +9,7 @@ Play Blur in a headset, seated. Built and tested with a Valve Index; any SteamVR
 
 [Watch the video](https://www.youtube.com/watch?v=-Gwqe6Wcjd8) · [Download the latest release](https://github.com/TwoAyEm/BlurVR/releases)
 
-**Contents:** [What it does](#what-it-does) · [Requirements](#requirements) · [Install](#install) · [Resolution](#resolution) · [Keys](#keys) · [Settings](#settings) · [How it works](#how-it-works) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting) · [What is new](#what-is-new) · [License](#license)
+**Contents:** [What it does](#what-it-does) · [Requirements](#requirements) · [Install](#install) · [Resolution](#resolution) · [Keys](#keys) · [Settings](#settings) · [OpenXR](#openxr-optional) · [How it works](#how-it-works) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting) · [What is new](#what-is-new) · [License](#license)
 
 ## What it does
 
@@ -24,7 +24,7 @@ Play Blur in a headset, seated. Built and tested with a Valve Index; any SteamVR
 ## Requirements
 
 - Windows
-- SteamVR
+- SteamVR (or, instead, an OpenXR runtime that has a 32-bit build: see [OpenXR](#openxr-optional))
 - Blur (32-bit; any version of the game should do, Steam or not, see Version 1.3 under [What is new](#what-is-new))
 - A graphics card that runs Direct3D 11 (any recent one)
 
@@ -32,7 +32,7 @@ Play Blur in a headset, seated. Built and tested with a Valve Index; any SteamVR
 
 1. Download the zip of the latest version from the [releases page](https://github.com/TwoAyEm/BlurVR/releases) and unzip it so that the `BlurVR` folder sits inside your Blur folder (next to `Blur.exe`), e.g. `...\steamapps\common\Blur\BlurVR\`
 2. Run `BlurVR\install.bat` (copies `d3d9.dll` next to `Blur.exe`). `uninstall.bat` removes it again.
-3. Start SteamVR, then launch Blur from Steam.
+3. Start SteamVR, then launch Blur from Steam. (To use OpenXR instead of SteamVR's OpenVR, see [OpenXR](#openxr-optional).)
 4. In the game's video options (**Options > Graphics > Resolution**) choose the size for your headset (see [Resolution](#resolution)).
    It is 2160x1200 until you change `Resolution` under `[VR]` in `BlurVR.ini`, or pick another size in the options.
    The game starts at that size from then on. V-Sync is turned off by BlurVR itself; the headset sets the frame rate.
@@ -106,7 +106,7 @@ The mod has three states:
 | `ModeKey` | `0x77` | F8 cycle mode (auto / force menu / force race) |
 | `StartMode` | `0` | 0 = auto (floating screen in menus, seated 3D in races), 1 = always floating screen, 2 = always race/3D |
 | `AutoRecenter` | `1` | 1 = also recentre every time a race starts |
-| `ThreadedInit` | `1` | Start OpenVR on a worker thread (keeps SteamVR from flagging the game as not responding) |
+| `ThreadedInit` | `1` | Start the VR runtime (OpenVR or OpenXR) on a worker thread (keeps SteamVR from flagging the game as not responding) |
 | `DeferVR` | `1` | Keep the game flat (SteamVR theatre) until the first level starts loading, then start VR |
 
 ### `[Tracking]`
@@ -141,6 +141,8 @@ Blur counts how long a key is held in frames and, after a second, repeats it eve
 
 | Key | Default | What it does |
 |---|---|---|
+| `Api` | `openvr` | How the headset is reached: `openvr` = SteamVR, `openxr` = the system's active OpenXR runtime (see [OpenXR](#openxr-optional): it needs a runtime with a 32-bit build). If OpenXR cannot start the game stays flat and `BlurVR.log` says why. |
+| `OpenXRRuntime` | (empty) | Only with `Api=openxr`: the full path of the `.json` of the OpenXR runtime to use instead of the system's active one (empty = the system's). Used for this game only. |
 | `Resolution` | `2160x1200` | The size of the VR picture, both eyes side by side (see [Resolution](#resolution)). It is the extra entry in the game's resolution list and the size the game starts at. Pick another size in the game's video options and BlurVR writes it here for you. The game's own settings keep the flat game's size. |
 | `Bloom` | `100` | Strength of the game's glow around its menus, UI and loading screens, in percent (0 = none, 200 = double) |
 | `NoLensFlare` | `0` | 1 = drop the flare sprites and the glow around lights |
@@ -218,6 +220,15 @@ The game decides what to draw from a view frustum around your head (both eyes' f
 |---|---|---|
 | `Report` | `1` | 1 = write the headset model, refresh rate, render size and lens hidden area to the log at VR start (needs `Log=1`) |
 
+## OpenXR (optional)
+
+BlurVR reaches the headset through SteamVR's OpenVR by default. Set `Api=openxr` under `[VR]` in `BlurVR.ini` to use OpenXR instead: the game then runs on the system's active OpenXR runtime (SteamVR's or another one). Without the line, or with `Api=openvr`, nothing changes.
+
+- **The runtime needs a 32-bit build.** Blur is a 32-bit program and sees only the OpenXR runtime that is registered for 32-bit programs: the `ActiveRuntime` value in `HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Khronos\OpenXR\1` has to point to a runtime `.json` whose library is a 32-bit DLL. SteamVR registers one from version 2.17 (answer yes when it asks whether to make SteamVR the default OpenXR runtime). Whether another runtime has a 32-bit build is for its maker to say. A 32-bit `.json` that is not the registered one can be given in `OpenXRRuntime` under `[VR]`. OpenXR support is new: it has been tried with SteamVR's OpenXR runtime and a Valve Index, where it looked the same as OpenVR; other runtimes and headsets have not been tried. Please send `BlurVR.log` with any problem.
+- **If OpenXR cannot start** (no 32-bit runtime, no headset, a failed session) the game stays on the monitor and `BlurVR.log` (with `Log=1`) says why, in lines that start with `OpenXR:`. BlurVR does not switch to SteamVR's OpenVR by itself; set `Api=openvr` for that.
+- **What is the same:** races, the HUD, the mirror, the markers, the settings and the keys. **What differs:** the recentre key (F9, and the recentre at the start of every race) is BlurVR's own, because OpenXR has no way to ask the runtime to recentre (a recentre done in the runtime itself is followed too), and the floating menu screen is an OpenXR quad layer instead of a SteamVR overlay.
+- `openxr_loader.dll` in the `BlurVR` folder is the 32-bit OpenXR loader of the Khronos Group (see `LICENSE_openxr.txt`).
+
 ## How it works
 
 ### Menu or race?
@@ -243,7 +254,7 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 
 - **The view is still culled at the edges / looking away from the direction of travel:** set `Log=1` under `[General]`, start a race for a minute, and look in `BlurVR.log` for the lines that start with `game camera:` and `head frustum:` (the water's reflection has `reflection frustum:` lines of its own). They say whether the game's camera code was found in your `Blur.exe`, whether its data is laid out as expected, and how many frustums were replaced. If they say it was not found, send `BlurVR.log` and the size and date of your `Blur.exe`.
 - **The markers over the AI cars stay on the HUD panel:** they need `Stereo=1` and the game's camera code to be found. With `Log=1` the `game camera:` and `ai hud:` lines in `BlurVR.log` say whether the game's code was found and why a check failed; send the log and the size and date of your `Blur.exe`.
-- **Nothing happens / the game is flat:** start SteamVR first; run `uninstall.bat` to go back to the plain game.
+- **Nothing happens / the game is flat:** start SteamVR first; run `uninstall.bat` to go back to the plain game. With `Api=openxr` start the OpenXR runtime instead and read the `OpenXR:` lines in `BlurVR.log` (set `Log=1`): they say whether a 32-bit runtime was found, whether it sees a headset and how far the start got (see [OpenXR](#openxr-optional)).
 - **Something looks wrong in the headset:** press **Num8** while it is on screen. BlurVR saves `BlurVR_dump_<time>_picture_*.bmp` (the whole side-by-side picture, large files) and one file per HUD layer in the BlurVR folder: attach them to the report.
 - **Bug reports** should also include `BlurVR.log`: set `Log=1` under `[General]`, reproduce the problem, close the game, and send `BlurVR\BlurVR.log`.
 - **Slow:** lower `Resolution` under `[VR]`. **Num7** (or `Enabled=1` under `[Perf]`, with `Log=1`) writes timing lines to the log.
@@ -251,6 +262,25 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **To run the game flat,** set `Stereo=0` (SteamVR is not used; the `[Display]` and `[Input]` settings still apply), or `Enabled=0` (the mod does nothing), or run `uninstall.bat`.
 
 ## What is new
+
+### Version 1.6
+
+**OpenXR (optional)**
+
+- **`Api=openxr` runs the game on OpenXR instead of SteamVR's OpenVR.** There is a new `Api` key under `[VR]`: `openvr` (the default) or `openxr`. With OpenXR the game uses the system's active OpenXR runtime: the race picture goes to the headset as an OpenXR projection layer, the menus and loading screens on a floating OpenXR screen, and head tracking, the HUD, the mirror, the markers and every other setting work as before. It has been tried with SteamVR's OpenXR runtime and a Valve Index, where it looked the same as OpenVR; other runtimes and headsets have not been tried. Without the line, or with `Api=openvr`, nothing changes.
+- **The runtime needs a 32-bit build,** because Blur is a 32-bit game. SteamVR registers one from version 2.17. [OpenXR](#openxr-optional) says how to check, and what to do for another runtime.
+- **`OpenXRRuntime`** (under `[VR]`, empty by default) is the path of the `.json` of the OpenXR runtime to use instead of the system's active one, for this game only.
+- **If OpenXR cannot start** (no 32-bit runtime, no headset, a failed session) the game stays on the monitor and `BlurVR.log` says why, in lines that start with `OpenXR:`. It does not switch to OpenVR by itself.
+- **Recentring is BlurVR's own with OpenXR:** F9 and the recentre at the start of every race set a reference pose in BlurVR, because OpenXR cannot ask the runtime to recentre. A recentre done in the runtime is followed too.
+
+**Package**
+
+- The zip has two new files next to `openvr_api.dll`: `openxr_loader.dll` (the 32-bit OpenXR loader of the Khronos Group) and its license, `LICENSE_openxr.txt`. The loader is only used with `Api=openxr`; copy it too if you update by replacing single files.
+- `install.bat` says that an OpenXR runtime can be started instead of SteamVR.
+
+**Other**
+
+- The OpenXR headers are in `source\third_party\openxr`, the code is in `source\src\openxr_runtime.cpp` (`source\NOTES.md`, section 27), and `build.bat` and `build.sh` need nothing new. A new host check, `source\tools\openxr_check.py`, tests the loader and the runtime without the game (with `--system` it also starts the runtime and runs frames of a test picture in the headset).
 
 ### Version 1.5
 
@@ -338,4 +368,4 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 
 ## License
 
-BlurVR is released under the [BSD 3-Clause License](https://github.com/TwoAyEm/BlurVR/blob/main/LICENSE.txt). `openvr_api.dll` is Valve's and comes with its own license (`LICENSE_openvr.txt`).
+BlurVR is released under the [BSD 3-Clause License](https://github.com/TwoAyEm/BlurVR/blob/main/LICENSE.txt). `openvr_api.dll` is Valve's and comes with its own license (`LICENSE_openvr.txt`). `openxr_loader.dll` is the Khronos Group's OpenXR loader (Apache-2.0 or MIT, `LICENSE_openxr.txt`).

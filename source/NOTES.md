@@ -23,7 +23,8 @@ Contents
 
 BlurVR is a **32-bit Direct3D 9 proxy `d3d9.dll`** that sits next to `Blur.exe` (no
 file patching and no injection of game code; everything happens by hooking at runtime). It talks to SteamVR
-through OpenVR's C API (`openvr_api.dll` in the `BlurVR\` subfolder; `third_party/openvr_capi.h`).
+through OpenVR's C API (`openvr_api.dll` in the `BlurVR\` subfolder; `third_party/openvr_capi.h`). With `[VR] Api=openxr` it talks to the system's OpenXR runtime instead
+(`openxr_loader.dll`, 32-bit, in the same folder; section 27).
 
 * Menus and loading: the game image is shown on a floating SteamVR overlay in front of the player.
 * Races: true stereo, seated. Every draw of the main 3D pass is issued twice (left half / right half of the game's
@@ -272,6 +273,7 @@ Known: popups still look slightly dim (`Veil*` settings); root cause never found
   state that never sees the scene stop times out after 8 s). While playing, `ComposeHudLayers` composes nothing. Log lines:
   `movie opened: ...`, `movie: the 3D scene stopped ...`, `movie: over ...`.
 * Hotkeys: F8 mode override, F9 recentre, F10 head tracking on/off.
+* With `[VR] Api=openxr` the runtime is reached through OpenXR (`openxr_runtime.cpp`); the pose, recentre, menu and submit steps above have OpenXR counterparts, section 27.
 
 ## 8. Resolution and display modes
 
@@ -322,7 +324,7 @@ where `ReadIniInt(..., oldSection)` says so: Stereo, ForceNoVSync, SharedTranspo
 1 floating screen / 2 race), ThreadedInit, DeferVR.
 `[Display]` (VR and flat) ForceNoVSync (0; in VR V-Sync is always off, the headset paces the game).
 `[Input]` (VR and flat) KeyRepeatMs (60 ms; 0 = off): menu key repeat limiter, `input_limiter.cpp` (section 19).
-`[VR]` (ignored when flat) Resolution (WxH, 2160x1200; `CustomWidth`/`CustomHeight` of `[Render]` are read when it is missing), Bloom (100 %: the game's glow around
+`[VR]` (ignored when flat) Api (`openvr`, the default, or `openxr`, section 27), OpenXRRuntime (the .json of an OpenXR runtime, empty = the system's active one), Resolution (WxH, 2160x1200; `CustomWidth`/`CustomHeight` of `[Render]` are read when it is missing), Bloom (100 %: the game's glow around
 menus, UI and loading screens; 0 = none), NoLensFlare (0; 1 drops the flare sprites and the bloom/glow around lights), SharedTransport (1, section 15),
 DesktopView (off; left / right / both; 1 / 2 / 0 / 3 still read, section 20), DesktopPresentEvery (1, section 18), FitDesktopWindow (1).
 `[Tracking]` Rotation, Position, PositionScale (game units per metre), IpdScale.
@@ -406,7 +408,8 @@ callback type; each module header lists what the module exports (with one-line c
 | `d3d_hooks` | Loading the real d3d9.dll, vtable patching, and the Direct3D function-pointer types the hooks use. | `LoadRealD3D9`, `PatchVtable` |
 | `shader_tracking` | Shader bookkeeping: constant tables of every vertex/pixel shader the game creates, the constants it uploads, and the shaders currently bound. | `NamesEqual`, `ParseVertexShaderConstants`, `ParsePixelShaderConstants` |
 | `game_mode` | Menu / race detection: the game opening files below "levels\" tells us which scene is loading. | `IsRaceMode`, `IsMovieFrame`, `UpdateMovieState`, `OnGameFileOpen`, `H_CreateFileA`, `H_CreateFileW`, `PatchModuleImports`, `InstallFileOpenHooks` |
-| `vr_runtime` | OpenVR / SteamVR session: initialisation, head pose, per-eye camera deltas, floating menu screen, and submitting the finished frame to the compositor. | `ReleaseStagingResources`, `EnsureStagingResources`, `EnsureFrameTexture`, `SplitVerticalTangents`, `VrInit`, `VrUpdatePose`, `PlaceMenuOverlay`, `VrSubmitFrame`, `StartVrInitThread`, `VrInitThread` |
+| `vr_runtime` | OpenVR / SteamVR session: initialisation, head pose, per-eye camera deltas, floating menu screen, and submitting the finished frame to the compositor.  With `[VR] Api=openxr` the runtime calls go through `openxr_runtime`. | `ReleaseStagingResources`, `EnsureStagingResources`, `EnsureFrameTexture`, `GetEyeToHead`, `SplitVerticalTangents`, `VrInitOpenXr`, `VrInit`, `VrUpdatePose`, `ComputeMenuTransform`, `PlaceMenuOverlay`, `SubmitFrameOpenXr`, `SubmitFrameBody`, `VrSubmitFrame`, `StartVrInitThread`, `VrInitThread` |
+| `openxr_runtime` | The OpenXR backend (section 27): loader, instance, Direct3D 11 session, head and eye poses, the swapchain and the layers (race picture as a projection layer, menu as a quad). | `XrRuntimeInit`, `XrRuntimeNextPose`, `XrRuntimeEyeToHead`, `XrRuntimeCovered`, `XrRuntimeFocused`, `XrRuntimeSubmitScene`, `XrRuntimeSubmitMenu`, `XrRuntimeFinishFrame` |
 | `render_state` | What the game is rendering into right now (render target, viewport, scissor, bound textures) and classification of the current pass (main scene, half-size, reflection). | `RefreshRenderTargetState`, `IsMainSizedTarget`, `IsHalfResPass`, `IsReflectionSizedPass`, `IsMainPass` |
 | `camera` | Recovering the game camera/projection from g_mViewProj and building the headset projection for each eye. | `DecomposeViewProjection`, `TryRecoverProjection`, `BuildEyeProjection` |
 | `stereo_scene` | Stereo duplication of main-pass draws: rewriting the tracked shader matrices for one eye (the products that do not change from draw to draw are cached, section 14). | `ReflectionColumnsMatch`, `GetRewrite`, `RecordRemap`, `ApplyEyeConstants`, `RestoreEyeConstants`, `ApplyCameraShift`, `ApplyEyePixelConstants`, `RestoreEyePixelConstants` |
@@ -969,7 +972,7 @@ an 800x600 window is left alone.  Not yet seen in the game.
 
 The repository on GitHub (https://github.com/TwoAyEm/BlurVR, branch `main`) starts as one squashed commit of the 1.1 tree; the development history before it is in the local branch `history` only (never pushed).
 `.github/workflows/build.yml` runs on `windows-latest` for every push to `main`, every pull request and by hand: Python 3.12, `pip install ziglang==0.16.0` (the Zig version the DLL was built and tested with), `source\build.bat nodeploy`,
-`tools/make_release.py`, `tools/check_release_zip.py` (the zip has the DLL, openvr_api.dll, the small ini, the README and the install scripts, no source; with a tag, the tag must be `v` + `BLURVR_VERSION`), and uploads
+`tools/make_release.py`, `tools/check_release_zip.py` (the zip has the DLL, openvr_api.dll, openxr_loader.dll, the small ini, the README, the install scripts and the two licence files, no source; with a tag, the tag must be `v` + `BLURVR_VERSION`), and uploads
 `BlurVR-<version>.zip` as the workflow artifact `BlurVR-zip`.  A push of a tag `v<version>` also creates the GitHub release with the zip attached (`gh release create` with the workflow's own token, no other secrets).
 To release: bump `BLURVR_VERSION` in `src/core.h`, commit, `git tag v<version>`, `git push origin main v<version>`.  The Zig compiler's version matters for the DLL bytes only, not for behaviour as far as tested; change the pin
 deliberately.
@@ -1220,3 +1223,73 @@ needed: the pictures sit at their slots). The patch of the skip, the detour and 
 every register; which markers the detour sees as drawn; the slots (tiling, no overlap, the world position that projects to the slot's pixel and depth, also for a turned and moved camera); the game's camera on the stack (read, refused when it is not a camera or far from the given one,
 the cars kept relative to it); the yaw flag held off and put back; the pick by head (the nearest car in the cone, the limit, the cone, the 15 % bonus); the geometry (clamps, the billboard flat to the head, a car behind the camera); the device calls (quads per eye, the order, the fills of
 the layer and of the glow); the HUD sway held at rest; a wrong car number giving the detour up. `tools/camera_sig_check.py` prints what the scan finds in a Blur.exe or a dump of the running module (`AI HUD: ... billboard flag found`).
+
+
+## 27. The OpenXR backend (`[VR] Api=openxr`, new in 1.6)
+
+**What and why.** The headset can be reached through OpenXR instead of OpenVR, chosen by `[VR] Api` (`openvr`, the default, or `openxr`; `g_cfg.vrApi`, `kVrApiOpenVr` / `kVrApiOpenXr`). It was asked for to get at runtimes
+that are not SteamVR (Virtual Desktop's VDXR was named) and because OpenXR is the API most runtimes speak. With `Api=openvr` the code path is the old one: `tools/hotpath_check.py` says IDENTICAL against the build before the change, and the OpenVR calls are
+the same lines as before, only moved into `if`/`else` forks. A failed OpenXR start leaves the game flat (`VrInit` returns false, `g_vr.active` stays false) and writes the reason to the log; it never falls back to OpenVR by itself.
+
+**32-bit.** The game is a 32-bit process, so OpenXR can be used only through the runtime's 32-bit build: the loader (`openxr_loader.dll`, shipped 32-bit in `BlurVR\`, Khronos release 1.1.65, `LICENSE_openxr.txt`) reads
+`HKLM\SOFTWARE\WOW6432Node\Khronos\OpenXR\1` `ActiveRuntime`. SteamVR 2.17 registers `steamxr_win32.json` there (a 32-bit `vrclient.dll`); this was confirmed on the development PC, where `tools/openxr_check.py` shows the 32-bit loader reaching it. Another runtime
+without a 32-bit build cannot be used in the game's process; a 64-bit helper process that receives the frames and returns the poses would be a separate project. `[VR] OpenXRRuntime=<path to a runtime .json>` sets `XR_RUNTIME_JSON` for the game's process (before the loader
+looks), so a 32-bit manifest that is not the registered one can be tried without changing the system's default. VDXR's 32-bit support is **not verified** (one Virtual Desktop patch note mentions a fix for 32-bit games; nothing says its OpenXR runtime has a 32-bit build).
+
+**Files.** `src/openxr_runtime.cpp/.h` is the whole backend (static state, a narrow interface with no OpenXR types in the header); `src/openxr_wrapper.h` includes the Khronos headers (`third_party/openxr/`, with `XR_USE_GRAPHICS_API_D3D11` and `XR_NO_PROTOTYPES`:
+nothing is linked, every function comes from `xrGetInstanceProcAddr`, as `openvr_api.dll` is loaded by name). `vr_runtime.cpp` keeps the maths and the game side and forks only where it calls the runtime: `VrInit` (-> `VrInitOpenXr`), `GetEyeToHead`, `VrUpdatePose`,
+the submit block of `SubmitFrameBody` (-> `SubmitFrameOpenXr`) and `ComputeMenuTransform` (the maths of `PlaceMenuOverlay`, shared). `VrSubmitFrame` is a wrapper that runs the body and then `XrRuntimeFinishFrame`, so every way out of the body ends the frame.
+
+**Mapping.**
+
+| OpenVR | OpenXR |
+|---|---|
+| `VR_InitInternal`, `GetDXGIOutputInfo` | `xrCreateInstance` (API 1.0, `XR_KHR_D3D11_enable`), `xrGetSystem`, `xrGetD3D11GraphicsRequirementsKHR` -> the Direct3D 11 device on the adapter LUID it names (`g_vr.d3d11Device`, as with OpenVR), `xrCreateSession`, `xrBeginSession` on `READY` |
+| `GetProjectionRaw` | the field of view of `xrLocateViews`, as tangents `{tan left, tan right, tan up, tan down}` into `g_rawTangents` (`SplitVerticalTangents` takes the "+y up" form as it is) |
+| `WaitGetPoses` (after Present) | `xrWaitFrame` + `xrBeginFrame` (after Present, in `VrUpdatePose`), then `xrLocateSpace(VIEW in LOCAL)` for the head and `xrLocateViews` in VIEW (eye-to-head, every frame) and in LOCAL (the eye poses submitted with the frame). The poses are turned into OpenVR's 3x4 layout so the maths after them is shared |
+| seated tracking space | the `LOCAL` reference space |
+| `GetEyeToHeadTransform`, `GetFloatTrackedDeviceProperty(UserIpd)` | the VIEW-space eye poses; the IPD is the distance between them |
+| `ResetZeroPose` (chaperone) | none: `g_vr.chaperone` is NULL, so the mod's own reference (`refYaw`, `refPos`, the old fallback) is used for F9 and for the recentre at the race start. A `XrEventDataReferenceSpaceChangePending` for `LOCAL` (the runtime recentred) sets `recenterPending` and re-places the menu |
+| `Submit(eye, texture, bounds)` x2 | one projection layer in `LOCAL`; one swapchain, side by side, the two `imageRect`s are the picture's halves |
+| `SetOverlayTexture` + `SetOverlayTransformAbsolute` | one `XrCompositionLayerQuad` in `LOCAL`: the same swapchain, the whole rect, width `[Menu] Width`, height from the picture's aspect, pose from `ComputeMenuTransform` |
+| the dark scene texture in menus | nothing: a frame with only a quad layer has a black background |
+| `IsDashboardVisible`, dashboard events 502/503 | the session state: changes into or out of `FOCUSED` or `VISIBLE` re-place the menu (for 45 frames), and so does every menu frame in the first 1500 frames while the state is `VISIBLE` (something else has the focus). `SYNCHRONIZED` does not count: SteamVR leaves the session there even while it shows the picture |
+
+**Frame discipline.** `XrRuntimeNextPose` handles the events, ends a frame that is still open (with no layers), waits, begins and locates. `XrRuntimeSubmitScene` / `XrRuntimeSubmitMenu` copy the picture into the swapchain image
+(`CopyResource` from `g_vr.sharedTexture11` or `g_vr.frameTexture`, `Flush`) and end the frame with the layer; `XrRuntimeFinishFrame` ends it with no layers when nothing was submitted (the pose was not valid, `shouldRender` was false, a copy failed, an early return of the body).
+A session that goes `STOPPING` is ended, `EXITING` / `LOSS_PENDING` stop all submitting (logged once; the game keeps running without the headset).
+**SYNCHRONIZED.** SteamVR keeps a new application in `SYNCHRONIZED` with `shouldRender` false (and `xrWaitFrame` not pacing: about 130 frames a second) while the headset is in standby (SteamVR logs "entering standby" during such a run; the Index goes there when it is not worn) or
+until the application is shown, so `BeginFrame` treats `shouldRender` as true in that state: the frame is rendered and submitted with its layers, which the runtime accepts (its log shows the two projection views with the bounds of the two halves). Without that a runtime that waits for
+a first frame with layers before it makes the session `VISIBLE` would never show anything. In the game (below) the session stayed `synchronized` for three minutes while the headset lay unworn and became `visible` and `focused` in the same millisecond when it was put on, so the state follows the headset; whether the runtime would show the application's frames
+without the override while the headset is unworn is not known.
+
+**The field of view submitted is the runtime's own, not the one scaled by `[Render] FovScale`.** The picture is drawn for the scaled boxes (`ComputeEyeBoxes`) and shown over the whole runtime field of view, which is what `FovScale` means with OpenVR too (the compositor stretches the whole texture over the field of view it knows).
+
+**Swapchain format.** `B8G8R8A8_UNORM_SRGB` (91) if the runtime offers it, else `B8G8R8A8_UNORM` (87); the picture is gamma-encoded BGRA, the sRGB format makes the runtime decode it, and both are in the picture's own format family, which `CopyResource` needs. A runtime that offers neither (RGBA only) is refused with
+the list of what it offers in the log; a shader blit would be needed for it and is not written. The swapchain is created at the first picture and again when the back buffer changes size (the game's resolution options).
+
+**Not carried over.** The `[Foveation] Report` line (`lens:`) has the headset name, the runtime's own render size, the largest swapchain and the tracking kinds, but not the refresh rate, the hidden-area share or the eye-gaze facts (those are OpenVR properties; `lens_model.cpp` is OpenVR only and returns when there is no `IVRSystem`).
+
+**Log lines (with `Log=1`).** `VR API: OpenVR (SteamVR)` or, for OpenXR: `OpenXR: runtime <name> <version>`, `lens: headset <name> (OpenXR) ...` (or `OpenXR: system <name>`), `OpenXR: graphics adapter <name>`, `OpenXR: D3D11 device ok`,
+`OpenXR: session idle -> ready` and the following state changes (`synchronized`, `visible`, `focused`; later `focused -> visible` when a dashboard is open), `OpenXR: eye N field of view ...`, then the shared lines `eye N tangents ...` (compare them with an OpenVR run: they should match to a
+fraction of a percent), `IPD`, `eye N to head`, `VR initialised (OpenXR)`, at the first picture `OpenXR: swapchain formats offered: ... -> <format>`, `OpenXR: swapchain WxH, n images`, `OpenXR: first copy, picture WxH format 87 -> image WxH format 91`, and (SharedTransport) the usual `SharedTransport:` lines.
+Failures: `OpenXR: could not load openxr_loader.dll`, `...listing the runtime's extensions failed` / `xrCreateInstance failed` (with the 32-bit registry hint), `...the runtime reports no headset`, `...xrGetSystem failed`, `...the session did not become ready`, `...xrEndFrame failed`.
+
+**Checks.** `python tools/openxr_check.py` builds `tools/openxr_check.cpp` (it links the real `openxr_runtime.cpp`, `core.cpp` and `config.cpp`) and runs: `probe` (the 32-bit loader finds a 32-bit runtime that offers `XR_KHR_D3D11_enable`; no instance is created, so no runtime is started), a `.json` that is no runtime
+(OpenXR does not start, cleanly, and the setting is named in the log; this also shows that `XR_RUNTIME_JSON` is picked up), and no `openxr_loader.dll` in the folder. With `--system` it also starts the installed runtime and runs 90 frames of a test picture (60 race frames, 30 menu frames): with
+a headset on, that is the nearest thing to a headset run that does not need the game, and it launches the runtime (SteamVR) if it is not running. The conversions between OpenXR's poses and OpenVR's 3x4 matrices were checked by a round trip (quaternion -> matrix -> quaternion, orthonormality, a yaw of +90 degrees turns the forward direction to the left).
+
+**Verified with `--system` (Valve Index, SteamVR/OpenXR 2.18.4, RTX 3060; the headset went into standby during the run).** The 32-bit loader starts the runtime (it launches vrserver by itself); `lens:` reports the runtime's own render size 2468x2740 per eye, 8192x8192 at most;
+the graphics adapter and the Direct3D 11 device (FL 11_0) are found; the session goes `idle -> ready -> synchronized`; the fields of view are l -57.0 / r 46.4 / up 54.6 / down 54.7 degrees (left eye) and mirrored (right eye), tangents l=-1.541 r=1.051 up=1.407 down=-1.414, and the eye-to-head
+offset is -/+31.5 to 35.0 mm in different runs (the IPD setting of the headset); the swapchain formats offered are 29 91 2 10 24 40 55 45 20 (91 = `B8G8R8A8_UNORM_SRGB` is taken; its images are reported as format 90, `B8G8R8A8_TYPELESS`, and the `CopyResource` from the picture's format 87 works); 60 race frames and 30 menu frames
+were submitted with a pose every frame and no error; the runtime's client log shows the projection views with bounds (0, 0, 0.5, 1) and (0.5, 0, 1, 1). The session never left `synchronized`, in a first run of 8 s with the headset in standby and again in a run of 20 s, although the compositor presented every frame at 90 a second (1893 presents, none dropped) and
+**the user saw the test gradient in the headset** (the race picture, through the projection layer, is visible). The menu quad (30 frames, a third of a second) was submitted and the compositor created its overlay, but whether it was seen is not known.
+
+**Verified in the game (Api=openxr, Valve Index, one session of about nine minutes, `BlurVR.log`).** `starting VR now (3D menu scene is being drawn)` (`DeferVR`), `VR initialised (OpenXR)` 4.6 s later on the worker thread (`ThreadedInit`; 3.3 s of it the runtime's instance creation), `VR active (threaded start)`, `mode -> 3D (stereo, seated)`;
+the shared-texture path (`SharedTransport: first race frame handed over as a shared texture`) and then `OpenXR: swapchain formats offered ... -> 91`, `swapchain 2160x1200, 3 images`, `first copy, picture ... format 87 -> image ... format 90`; the `eye N tangents` lines equal the check's; the head frustum, reflection frustum, mirror pass,
+HUD layers, streaks, the AI car markers (`world markers: ... placed`, the detour agreeing in 203 of 203 cases) and the race menu detection all ran as with OpenVR; a race (`spa_barcelona_gracia`) with the floating screen while it loaded (`mode -> BOXED`, 26 s) and `3D scene detected -> stereo`; two resolution changes in the options
+(4936x2740, then 4032x2240: `Reset`, new shared texture, `OpenXR: swapchain 4936x2740` and `4032x2240`, the swapchain made again each time); back to the showroom; at the end `settings.xml: the flat game's display mode is back`. No `OpenXR:` failure line and no skipped-frame line. The session was `synchronized` from the start (the headset lay
+unworn for three minutes, the game already rendering) and went `synchronized -> visible -> focused` at the moment the headset was put on; the recentre by the mod's own reference (F9 or the race start) printed `recentered (own reference)` each time. The look of it, by the user's eye: as good as OpenVR, no difference noticed (scale, sharpness, colour, eye order, the menu screen, comfort). Not measured: the frame pacing (`[Perf]`, Num7), F9 and the dashboard in a deliberate test, any other runtime or headset.
+
+**Not verified (needs the headset worn, and the game).** Everything past that: that the picture arrives with the right scale, colour and eye order; that the menu quad sits where the overlay did and follows a dashboard and a recentre; that a quad-only frame does not show the runtime's home behind it; frame pacing and latency against `WaitGetPoses`
+(`[Perf]`, Num7); the shared-texture path into the runtime's images (`first copy` and the absence of `failed` lines); a resolution change in the game's options (swapchain re-creation); VDXR or any other runtime.

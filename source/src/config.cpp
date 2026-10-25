@@ -54,6 +54,33 @@ static int ReadIniDesktopView(const char* section, const char* key, int defaultV
         return kDesktopViewOff;
     return (int)strtol(buf, NULL, 0);
 }
+// Api: openvr / openxr.  Anything else is read as the default, openvr.
+static int ReadIniApi(const char* section, const char* key, int defaultValue)
+{
+    char buf[64];
+    if (!ReadIniText(section, key, NULL, buf, sizeof(buf)))
+        return defaultValue;
+    if (!_stricmp(buf, "openxr"))
+        return kVrApiOpenXr;
+    return kVrApiOpenVr;
+}
+// A text value (a path), without the quotes it may be written in.  buf holds the default when the key is missing.
+static void ReadIniString(const char* section, const char* key, const char* defaultValue, char* buf, DWORD size)
+{
+    char text[MAX_PATH];
+    if (ReadIniText(section, key, NULL, text, sizeof(text))) {
+        size_t length = strlen(text);
+        if (length >= 2 && text[0] == '"' && text[length - 1] == '"') {
+            text[length - 1] = 0;
+            memmove(text, text + 1, length - 1);
+        }
+        strncpy(buf, text, size - 1);
+        buf[size - 1] = 0;
+    } else {
+        strncpy(buf, defaultValue, size - 1);
+        buf[size - 1] = 0;
+    }
+}
 void LoadConfig()
 {
     // Enabled is the master switch (0 = the mod does nothing).  Stereo says which half runs: 1 = VR, 0 = flat, where only the
@@ -133,6 +160,8 @@ void LoadConfig()
     g_cfg.coverageEvery = ReadIniInt("Hud", "CoverageEvery", 8);
     g_cfg.desktopPresentEvery = ReadIniInt("VR", "DesktopPresentEvery", 1, "Render");
     g_cfg.desktopView = ReadIniDesktopView("VR", "DesktopView", kDesktopViewOff, "Render");
+    g_cfg.vrApi = ReadIniApi("VR", "Api", kVrApiOpenVr);
+    ReadIniString("VR", "OpenXRRuntime", "", g_cfg.openxrRuntime, sizeof(g_cfg.openxrRuntime));
     g_cfg.fitDesktopWindow = ReadIniInt("VR", "FitDesktopWindow", 1, "Render");
     g_cfg.foveationReport = ReadIniInt("Foveation", "Report", 1);
     g_cfg.cullMarginDeg = ReadIniDouble("Culling", "MarginDeg", 6.0);

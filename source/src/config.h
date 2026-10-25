@@ -4,6 +4,8 @@
 
 // What g_cfg.desktopView is for [VR] DesktopView=off
 const int kDesktopViewOff = 3;
+// What g_cfg.vrApi is for [VR] Api=openvr / openxr
+const int kVrApiOpenVr = 0, kVrApiOpenXr = 1;
 
 struct Config {
     int enabled = 1, log = 0; // enabled: [General] Enabled, the master switch (0 = the mod does nothing); log: BlurVR.log is only written with Log=1 under [General]
@@ -64,6 +66,8 @@ struct Config {
     int startWidth = 0, startHeight = 0; // VR only (set by LoadConfig): the size the start should have, the VR resolution
     int coverageEvery = 8; // [Hud] CoverageEvery: a UI draw's screen coverage (an occlusion query the CPU waits for) is measured again every this many frames, staggered; 1 = every draw as before
     int fitDesktopWindow = 1; // [Render] FitDesktopWindow: the game's window is never made bigger than the work area of its monitor (it is only a mirror of the headset)
+    int vrApi = kVrApiOpenVr; // [VR] Api: which API the headset is reached through: openvr (SteamVR, the default) or openxr (the system's active OpenXR runtime; vr_runtime.cpp, openxr_runtime.cpp)
+    char openxrRuntime[MAX_PATH] = ""; // [VR] OpenXRRuntime: the .json of the OpenXR runtime to use instead of the system's active one (empty = the system's); only with Api=openxr
     int desktopView = kDesktopViewOff; // [VR] DesktopView (default off since 1.5): what the window on the desktop shows in a race: 1 = the left eye's view, 2 = the right eye's, 0 = the whole side-by-side picture, kDesktopViewOff = "Playing in VR" and the game's logo (desktop_message.cpp)
     int desktopPresentEvery = 1; // [Render] DesktopPresentEvery: in a race the game's window gets a real Present only every this many frames (1 = every frame as the game wants)
     double cullMarginDeg = 6.0, cullPullBack = 0.3; // [Culling] MarginDeg (added to every side) and PullBack (metres the frustum's apex is moved back) of the frustum around the head that the game culls with in VR, game_camera.cpp

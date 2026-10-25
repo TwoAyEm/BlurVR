@@ -1,5 +1,5 @@
 // OpenVR / SteamVR session: initialisation, head pose, per-eye camera deltas, floating menu screen, and submitting the
-// finished frame to the compositor.
+// finished frame to the compositor.  [VR] Api=openxr does the same through openxr_runtime.cpp.
 #pragma once
 #include "common.h"
 #include "openvr_wrapper.h"

@@ -1,4 +1,5 @@
 // OpenVR / SteamVR session: initialisation, head pose, per-eye camera deltas, floating menu screen, and submitting the finished frame to the compositor.
+// With [VR] Api=openxr the runtime calls go through openxr_runtime.cpp instead; the maths and the game side are the same.
 #include "vr_runtime.h"
 #include "config.h"
 #include "d3d_hooks.h"
@@ -9,6 +10,7 @@
 #include "game_mode.h"
 #include "hud.h"
 #include "lens_model.h"
+#include "openxr_runtime.h"
 #include "perf_probe.h"
 #include "streaks.h"
 
@@ -195,6 +197,15 @@ static bool EnsureFrameTexture(UINT w, UINT h)
 // the first argument (the function hands it back in EAX), so it is called with that pointer spelled out.
 typedef HmdMatrix34_t*(__stdcall* PFN_EyeToHeadRaw)(HmdMatrix34_t*, EVREye);
 
+// One eye's eye-to-head transform, from the API in use (OpenXR's is the one of the last located frame)
+static void GetEyeToHead(int eye, HmdMatrix34_t* m)
+{
+    if (g_cfg.vrApi == kVrApiOpenXr)
+        XrRuntimeEyeToHead(eye, m->m);
+    else
+        ((PFN_EyeToHeadRaw)(void*)g_vr.system->GetEyeToHeadTransform)(m, (EVREye)eye);
+}
+
 // Head space to eye space for one eye (row vectors, D3D's left-handed axes), from SteamVR's eye-to-head transform: on headsets
 // with canted displays it holds a rotation, and the eye's tangent box (GetProjectionRaw) is given in that rotated frame.  The
 // translation is scaled by IpdScale and PositionScale like the half IPD it replaces.  False when the runtime gives something that
@@ -202,7 +213,7 @@ typedef HmdMatrix34_t*(__stdcall* PFN_EyeToHeadRaw)(HmdMatrix34_t*, EVREye);
 static bool ReadHeadToEye(int eye, Matrix4& headToEye, double translation[3])
 {
     HmdMatrix34_t m;
-    ((PFN_EyeToHeadRaw)(void*)g_vr.system->GetEyeToHeadTransform)(&m, (EVREye)eye);
+    GetEyeToHead(eye, &m);
     double rotation[3][3];
     for (int r = 0; r < 3; r++) {
         for (int c = 0; c < 3; c++)
@@ -232,7 +243,7 @@ static void LogEyeToHead()
 {
     for (int eye = 0; eye < 2; eye++) {
         HmdMatrix34_t m;
-        ((PFN_EyeToHeadRaw)(void*)g_vr.system->GetEyeToHeadTransform)(&m, (EVREye)eye);
+        GetEyeToHead(eye, &m);
         Matrix4 headToEye;
         double t[3];
         bool usable = ReadHeadToEye(eye, headToEye, t);
@@ -286,6 +297,29 @@ static void ComputeEyeBoxes()
     }
 }
 
+// [VR] Api=openxr: the runtime, its Direct3D 11 device and the field of view come from openxr_runtime.cpp, the rest of the start is the same
+// as with OpenVR.  There is no chaperone to recentre through, so the first pose sets the mod's own reference pose (as without IVRChaperone).
+static bool VrInitOpenXr()
+{
+    float eyeToHead[2][3][4];
+    if (!XrRuntimeInit(g_rawTangents, eyeToHead)) {
+        Log("OpenXR could not be started: VR is off and the game runs flat (set Api=openvr under [VR] to use SteamVR)");
+        return false;
+    }
+    ComputeEyeBoxes();
+    double dx = eyeToHead[1][0][3] - eyeToHead[0][0][3], dy = eyeToHead[1][1][3] - eyeToHead[0][1][3], dz = eyeToHead[1][2][3] - eyeToHead[0][2][3];
+    double ipd = sqrt(dx * dx + dy * dy + dz * dz);
+    if (ipd > 0.04 && ipd < 0.09)
+        g_vr.ipd = ipd;
+    Log("IPD %.1f mm", g_vr.ipd * 1000.0);
+    LogEyeToHead();
+    for (int i = 0; i < 3; i++)
+        g_vr.eyeCameraDelta[i] = Identity();
+    g_vr.recenterPending = true;
+    Log("VR initialised (OpenXR)");
+    return true;
+}
+
 bool VrInit()
 {
     if (g_vr.tried)
@@ -295,6 +329,9 @@ bool VrInit()
         Log(g_cfg.enabled ? "Stereo=0 in ini: flat mode, SteamVR is not used" : "Disabled in ini");
         return false;
     }
+    if (g_cfg.vrApi == kVrApiOpenXr)
+        return VrInitOpenXr();
+    Log("VR API: OpenVR (SteamVR)");
 
     std::string dllPath = std::string(g_modDir) + "openvr_api.dll";
     g_vr.openvrDll = LoadLibraryExA(dllPath.c_str(), NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
@@ -453,17 +490,34 @@ void VrUpdatePose()
             }
     }
     TrackedDevicePose_t poses[64];
-    EVRCompositorError compositorError = g_vr.compositor->WaitGetPoses(poses, 64, NULL, 0);
-    if (compositorError != EVRCompositorError_VRCompositorError_None) {
-        g_vr.poseValid = false;
-        return;
+    XrPoseResult xrPose;
+    const float(*pose)[4];
+    if (g_cfg.vrApi == kVrApiOpenXr) {
+        bool xrValid = XrRuntimeNextPose(&xrPose); // (waits for the next frame, like WaitGetPoses, and handles the runtime's events)
+        if (xrPose.menuReplace) {
+            g_vr.menuNeedsPlacement = true;
+            g_vr.menuPlaceUntilFrame = g_vr.frameCount + 45;
+        }
+        if (xrPose.recenter)
+            g_vr.recenterPending = true;
+        if (!xrValid) {
+            g_vr.poseValid = false;
+            return;
+        }
+        pose = xrPose.head;
+    } else {
+        EVRCompositorError compositorError = g_vr.compositor->WaitGetPoses(poses, 64, NULL, 0);
+        if (compositorError != EVRCompositorError_VRCompositorError_None) {
+            g_vr.poseValid = false;
+            return;
+        }
+        const TrackedDevicePose_t& hmdPose = poses[k_unTrackedDeviceIndex_Hmd];
+        if (!hmdPose.bPoseIsValid) {
+            g_vr.poseValid = false;
+            return;
+        }
+        pose = hmdPose.mDeviceToAbsoluteTracking.m;
     }
-    const TrackedDevicePose_t& hmdPose = poses[k_unTrackedDeviceIndex_Hmd];
-    if (!hmdPose.bPoseIsValid) {
-        g_vr.poseValid = false;
-        return;
-    }
-    const float(*pose)[4] = hmdPose.mDeviceToAbsoluteTracking.m;
 
     // menu-screen anchor (right-handed tracking space): flat forward direction
     g_vr.hmdPos[0] = pose[0][3];
@@ -566,16 +620,15 @@ void VrUpdatePose()
     g_vr.poseValid = true;
 }
 
-static void PlaceMenuOverlay()
+// Where the floating menu screen goes: flat in front of the head, facing it (right-handed tracking space)
+static void ComputeMenuTransform(HmdMatrix34_t* out)
 {
-    if (!g_vr.overlay)
-        return;
     double forward[3] = {g_vr.hmdFwd[0], 0, g_vr.hmdFwd[2]};
     double overlayZ[3] = {-forward[0], 0, -forward[2]};  // overlay +Z faces the user
     double overlayX[3] = {overlayZ[2], 0, -overlayZ[0]}; // up x z
     double position[3] = {g_vr.hmdPos[0] + forward[0] * g_cfg.menuDistance, g_vr.hmdPos[1] + g_cfg.menuHeight,
                           g_vr.hmdPos[2] + forward[2] * g_cfg.menuDistance};
-    HmdMatrix34_t transform;
+    HmdMatrix34_t& transform = *out;
     transform.m[0][0] = (float)overlayX[0];
     transform.m[0][1] = 0;
     transform.m[0][2] = (float)overlayZ[0];
@@ -588,8 +641,36 @@ static void PlaceMenuOverlay()
     transform.m[2][1] = 0;
     transform.m[2][2] = (float)overlayZ[2];
     transform.m[2][3] = (float)position[2];
+}
+static void PlaceMenuOverlay()
+{
+    if (!g_vr.overlay)
+        return;
+    HmdMatrix34_t transform;
+    ComputeMenuTransform(&transform);
     g_vr.overlay->SetOverlayTransformAbsolute(g_vr.menuOverlay, ETrackingUniverseOrigin_TrackingUniverseSeated, &transform);
     g_vr.menuNeedsPlacement = false;
+}
+// Api=openxr: the finished picture to the headset (openxr_runtime.cpp): a race frame as a projection layer, anything else on the floating
+// menu screen, which is a quad layer placed the same way as the OpenVR overlay.
+static void SubmitFrameOpenXr(bool sceneFrame, bool sharedCopied, UINT width, UINT height)
+{
+    if (sceneFrame) {
+        XrRuntimeSubmitScene(sharedCopied ? g_vr.sharedTexture11 : g_vr.frameTexture, width, height);
+        return;
+    }
+    static HmdMatrix34_t menuPose;
+    static bool menuPlaced = false;
+    // (re-placed for a few frames after a recentre, and while something else (a dashboard) has the focus over the game: the pose is unreliable then)
+    if (g_vr.frameCount < g_vr.menuPlaceUntilFrame || (g_vr.frameCount < 1500 && XrRuntimeCovered()))
+        g_vr.menuNeedsPlacement = true;
+    if (!menuPlaced || (g_vr.menuNeedsPlacement && g_vr.poseValid)) {
+        ComputeMenuTransform(&menuPose);
+        menuPlaced = true;
+        if (g_vr.poseValid)
+            g_vr.menuNeedsPlacement = false;
+    }
+    XrRuntimeSubmitMenu(g_vr.frameTexture, width, height, menuPose.m, g_cfg.menuWidth);
 }
 
 // In-game switches: the 3D rear-view mirror (numpad 6 by default), the timing probe (numpad 7).  Pressing the mirror key flips it
@@ -663,7 +744,7 @@ bool VrShowEyeOnDesktop(IDirect3DDevice9* device, RECT* presented)
     return small;
 }
 
-void VrSubmitFrame(IDirect3DDevice9* device)
+static void SubmitFrameBody(IDirect3DDevice9* device)
 {
     g_vr.desktopSource = NULL;
     g_streakUsed = false;
@@ -807,7 +888,10 @@ void VrSubmitFrame(IDirect3DDevice9* device)
     }
     backBuffer->Release();
 
-    if (copied) {
+    if (copied && g_cfg.vrApi == kVrApiOpenXr) {
+        PerfScope perfSubmit(PS_SUBMIT);
+        SubmitFrameOpenXr(inRace && g_sceneDrawsThisFrame > 0, sharedCopied, desc.Width, desc.Height);
+    } else if (copied) {
         PerfScope perfSubmit(PS_SUBMIT);
         bool sceneFrame = inRace && g_sceneDrawsThisFrame > 0;
         Texture_t texture;
@@ -868,6 +952,13 @@ void VrSubmitFrame(IDirect3DDevice9* device)
 
     g_vr.frameCount++;
     g_sceneDrawsThisFrame = 0;
+}
+
+void VrSubmitFrame(IDirect3DDevice9* device)
+{
+    SubmitFrameBody(device);
+    if (g_cfg.vrApi == kVrApiOpenXr)
+        XrRuntimeFinishFrame(); // (every way out of the body: a frame it handed no layer is ended with none)
 }
 
 DWORD WINAPI VrInitThread(LPVOID);
