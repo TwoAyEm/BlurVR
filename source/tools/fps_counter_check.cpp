@@ -61,6 +61,19 @@ static bool WriteBmp(const char* path, int width, int height, const std::vector<
     return true;
 }
 
+// ---- a headset of a known refresh rate: the module asks the system object for it ----------------------------------------------------------------------------
+static float OPENVR_FNTABLE_CALLTYPE FakeFloatProperty(TrackedDeviceIndex_t, ETrackedDeviceProperty prop, ETrackedPropertyError* error)
+{
+    *error = prop == ETrackedDeviceProperty_Prop_DisplayFrequency_Float ? ETrackedPropertyError_TrackedProp_Success : ETrackedPropertyError_TrackedProp_UnknownProperty;
+    return 90.0f;
+}
+static VR_IVRSystem_FnTable g_fakeSystem;
+static void SetHeadset(bool known) // (read when the next figure is taken)
+{
+    g_fakeSystem.GetFloatTrackedDeviceProperty = FakeFloatProperty;
+    g_vr.system = known ? &g_fakeSystem : NULL;
+}
+
 // ---- counting frames ----------------------------------------------------------------------------------------------------------------------------------------
 static const long long kPerSecond = 10000000; // (a clock of 10 MHz)
 static long long g_clock = 5 * kPerSecond;
@@ -125,6 +138,43 @@ static void CheckCounting()
     CHECK(FpsCounterShown() > 0 && FpsCounterShown() < 60, "a hitch of 1.5 s lowers the figure (%d)", FpsCounterShown());
 }
 
+static void CheckSamples()
+{
+    printf("samples of the graph:\n");
+    float samples[kFpsGraphColumns + 10];
+    StartOver();
+    CHECK(FpsCounterGraph(samples, 100) == 0, "no samples at the start");
+    Frames(120, kPerSecond / 60); // two seconds
+    int count = FpsCounterGraph(samples, 100);
+    CHECK(count >= 6 && count <= 8, "two seconds give about seven samples (%d)", count);
+    for (int i = 0; i < count; i++)
+        CHECK(fabs(samples[i] - 60.0) < 0.5, "sample %d of a steady 60 is 60 (%.2f)", i, samples[i]);
+    // a hitch makes a low sample of its own, then the rate is back
+    Frames(1, kPerSecond * 3 / 10);
+    Frames(60, kPerSecond / 60);
+    count = FpsCounterGraph(samples, 100);
+    float lowest = 999;
+    for (int i = 0; i < count; i++)
+        lowest = fminf(lowest, samples[i]);
+    CHECK(lowest < 30 && fabs(samples[count - 1] - 60.0) < 0.5, "a hitch of 0.3 s shows as a low sample (%.1f) and the rate comes back (%.1f)", lowest, samples[count - 1]);
+    // the graph holds 74 samples, the newest last
+    StartOver();
+    Frames(25 * 90, kPerSecond / 90);
+    Frames(3 * 45, kPerSecond / 45);
+    count = FpsCounterGraph(samples, 100);
+    CHECK(count == kFpsGraphColumns, "the graph holds %d samples (%d)", kFpsGraphColumns, count);
+    CHECK(fabs(samples[count - 1] - 45.0) < 0.5 && fabs(samples[count - 30] - 90.0) < 0.5, "the newest is last (%.1f ... %.1f)", samples[count - 30], samples[count - 1]);
+    float newest[5];
+    CHECK(FpsCounterGraph(newest, 5) == 5 && memcmp(newest, samples + count - 5, sizeof(newest)) == 0, "a small buffer gets the newest samples");
+    // a gap starts over; the limit of 999
+    g_clock += 3 * kPerSecond;
+    FpsCounterFrameAt(g_clock, kPerSecond);
+    CHECK(FpsCounterGraph(samples, 100) == 0, "a gap of three seconds empties the graph");
+    Frames(6000, kPerSecond / 5000);
+    count = FpsCounterGraph(samples, 100);
+    CHECK(count > 0 && samples[0] == 999 && samples[count - 1] == 999, "5000 frames a second give samples of 999 (%.0f)", count ? samples[0] : -1.f);
+}
+
 static void CheckColours()
 {
     printf("colours:\n");
@@ -162,6 +212,8 @@ static void CheckFont()
     unsigned char scratch[7];
     CHECK(!FpsCounterGlyph(' ', scratch) && !FpsCounterGlyph('A', scratch) && !FpsCounterGlyph(0, scratch), "other characters have no glyph");
     CHECK(kFpsPlateWidth == 41 && kFpsPlateHeight == 11, "the plate is 41 x 11 font pixels (%d x %d)", kFpsPlateWidth, kFpsPlateHeight);
+    CHECK(kFpsGraphColumns == 74 && kFpsGraphRows == 18 && kFpsGraphThickness == 2 && kFpsGraphLevels == 17, "the graph is 74 x 18 cells with a line 2 thick and 17 heights (%d x %d, %d, %d)",
+          kFpsGraphColumns, kFpsGraphRows, kFpsGraphThickness, kFpsGraphLevels);
     // each glyph touches the top and the bottom row and the left or right column: the layout rests on them being 5 x 7
     for (int i = 0; i < 13; i++)
         CHECK(rows[i][0] != 0 && rows[i][6] != 0, "glyph %c fills its first and last row", all[i]);
@@ -235,7 +287,7 @@ static unsigned PixelAt(const std::vector<unsigned>& pixels, double sx, double s
 }
 
 // Is the figure there, pixel by pixel of the font?  Returns the number of font pixels that are not as they should be.
-static int CheckFigure(const std::vector<unsigned>& pixels, int fps, const char* name)
+static int CheckFigure(const std::vector<unsigned>& pixels, int fps, const char* name, unsigned litColour = 0xFFFFFF)
 {
     char digits[8];
     const int length = snprintf(digits, sizeof(digits), "%d", fps);
@@ -254,7 +306,7 @@ static int CheckFigure(const std::vector<unsigned>& pixels, int fps, const char*
                     const bool lit = known && (rows[y] & (1 << (4 - x)));
                     const unsigned p = cell(left + x, kFpsMargin + y);
                     const int r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
-                    const bool isLit = r >= 240 && g >= 240 && b >= 240;
+                    const bool isLit = abs(r - (int)((litColour >> 16) & 255)) <= 4 && abs(g - (int)((litColour >> 8) & 255)) <= 4 && abs(b - (int)(litColour & 255)) <= 4;
                     const bool isPlate = abs(r - 53) <= 4 && abs(g - 53) <= 4 && abs(b - 53) <= 4;
                     if (lit ? !isLit : !isPlate) {
                         if (wrong++ < 5)
@@ -281,6 +333,92 @@ static int CheckFigure(const std::vector<unsigned>& pixels, int fps, const char*
     return wrong;
 }
 
+// The middle of a cell of the graph (a column and a row of the plot) in the picture
+static unsigned GraphCell(const std::vector<unsigned>& pixels, int eye, int column, int row)
+{
+    double sx, sy;
+    Expected(eye, kFpsGraphMarginX + (column + 0.5) / kFpsGraphCell, kFpsPlateHeight + kFpsGraphMarginY + (row + 0.5) / kFpsGraphCell, &sx, &sy);
+    return PixelAt(pixels, sx, sy);
+}
+static bool Near(unsigned p, unsigned q, int tolerance)
+{
+    return abs((int)((p >> 16) & 255) - (int)((q >> 16) & 255)) <= tolerance && abs((int)((p >> 8) & 255) - (int)((q >> 8) & 255)) <= tolerance &&
+           abs((int)(p & 255) - (int)(q & 255)) <= tolerance;
+}
+static const unsigned kPlateGrey = 0x353535; // (black at 150 of 255 over the grey of 0x80)
+
+// Is the graph there, cell by cell?  The picture is worked out here from the samples the module holds, with the scale as NOTES.md section 27 describes it (lowest sample at the
+// bottom, highest at the top, never less than a tenth of the highest as the span; each column joins its sample to the next; the colour is the colour of the lower of the two).
+// Returns the number of cells that are not as they should be.
+static int CheckGraph(const std::vector<unsigned>& pixels, double refreshHz, const char* name)
+{
+    float samples[kFpsGraphColumns];
+    const int count = FpsCounterGraph(samples, kFpsGraphColumns);
+    static bool lit[kFpsGraphColumns][kFpsGraphRows];
+    static unsigned colour[kFpsGraphColumns][kFpsGraphRows];
+    memset(lit, 0, sizeof(lit));
+    if (count > 0) {
+        double lo = samples[0], hi = samples[0];
+        for (int i = 0; i < count; i++) {
+            lo = fmin(lo, samples[i]);
+            hi = fmax(hi, samples[i]);
+        }
+        const double span = fmax(hi * 0.1, 1.0);
+        if (hi - lo < span) {
+            const double middle = (lo + hi) / 2;
+            lo = middle - span / 2;
+            hi = middle + span / 2;
+        }
+        auto level = [&](double v) { return std::min(16, std::max(0, (int)floor((v - lo) / (hi - lo) * 16 + 0.5))); };
+        for (int i = 0; i < count; i++) {
+            const int column = kFpsGraphColumns - count + i;
+            const int here = level(samples[i]), there = level(samples[std::min(i + 1, count - 1)]);
+            const int top = 16 - std::max(here, there), bottom = 16 - std::min(here, there) + 2; // (rows from the top of the plot: the higher level is the upper end)
+            const D3DCOLOR c = FpsCounterColor((int)(fmin(samples[i], samples[std::min(i + 1, count - 1)]) + 0.5), refreshHz);
+            for (int row = top; row < bottom; row++) {
+                lit[column][row] = true;
+                colour[column][row] = c & 0xFFFFFF;
+            }
+        }
+    }
+    int wrong = 0;
+    for (int eye = 0; eye < 2; eye++) {
+        for (int column = 0; column < kFpsGraphColumns; column++)
+            for (int row = 0; row < kFpsGraphRows; row++) {
+                const unsigned p = GraphCell(pixels, eye, column, row);
+                if (lit[column][row] ? !Near(p, colour[column][row], 3) : !Near(p, kPlateGrey, 4)) {
+                    if (wrong++ < 5)
+                        printf("  %s eye %d: graph cell %d,%d is %06x, should be %06x\n", name, eye, column, row, p, lit[column][row] ? colour[column][row] : kPlateGrey);
+                }
+            }
+        // the plate under the figure goes on under the graph, to its corners
+        double sx, sy;
+        const double corners[4][2] = {{0.5, kFpsPlateHeight + 0.5}, {kFpsPlateWidth - 0.5, kFpsPlateHeight + 0.5}, {0.5, 2 * kFpsPlateHeight - 0.5}, {kFpsPlateWidth - 0.5, 2 * kFpsPlateHeight - 0.5}};
+        for (const double* corner : corners) {
+            Expected(eye, corner[0], corner[1], &sx, &sy);
+            if (!Near(PixelAt(pixels, sx, sy), kPlateGrey, 4)) {
+                wrong++;
+                printf("  %s eye %d: a corner of the graph's plate is %06x\n", name, eye, PixelAt(pixels, sx, sy));
+            }
+        }
+    }
+    return wrong;
+}
+
+// The rows of the plot the line reaches, highest and lowest; false when there is no line.
+static bool GraphExtent(const std::vector<unsigned>& pixels, int eye, int* top, int* bottom)
+{
+    *top = kFpsGraphRows;
+    *bottom = -1;
+    for (int column = 0; column < kFpsGraphColumns; column++)
+        for (int row = 0; row < kFpsGraphRows; row++)
+            if (!Near(GraphCell(pixels, eye, column, row), kPlateGrey, 12)) {
+                *top = std::min(*top, row);
+                *bottom = std::max(*bottom, row);
+            }
+    return *bottom >= 0;
+}
+
 // Nothing outside the two plates may have changed; returns how many pixels did.
 static size_t ChangedOutsidePlates(const std::vector<unsigned>& pixels, std::vector<unsigned>* before)
 {
@@ -288,7 +426,7 @@ static size_t ChangedOutsidePlates(const std::vector<unsigned>& pixels, std::vec
     for (int eye = 0; eye < 2; eye++) {
         double x0, y0, x1, y1;
         Expected(eye, 0, 0, &x0, &y0);
-        Expected(eye, kFpsPlateWidth, kFpsPlateHeight, &x1, &y1);
+        Expected(eye, kFpsPlateWidth, 2 * kFpsPlateHeight, &x1, &y1);
         plate[eye] = {(LONG)floor(x0) - 3, (LONG)floor(y0) - 3, (LONG)ceil(x1) + 3, (LONG)ceil(y1) + 3};
     }
     size_t changed = 0;
@@ -310,7 +448,7 @@ static void SavePanel(const std::vector<unsigned>& pixels, const char* folder, c
     for (int eye = 0; eye < 2; eye++) {
         double x0, y0, x1, y1;
         Expected(eye, 0, 0, &x0, &y0);
-        Expected(eye, kFpsPlateWidth, kFpsPlateHeight, &x1, &y1);
+        Expected(eye, kFpsPlateWidth, 2 * kFpsPlateHeight, &x1, &y1);
         const int left = (int)x0 - 40, top = (int)y0 - 40, width = (int)(x1 - x0) + 80, height = (int)(y1 - y0) + 80;
         std::vector<unsigned> crop((size_t)width * height);
         for (int y = 0; y < height; y++)
@@ -487,6 +625,8 @@ static void CheckDevice(const char* folder, bool ex)
                 CHECK(ReadBack(device, backBuffer, copy, pixels), "read back");
                 const int wrong = CheckFigure(pixels, fps, name);
                 CHECK(wrong == 0, "%s%s: %d font pixels are not as they should be", name, inScene ? " (in a scene)" : "", wrong);
+                const int graphWrong = CheckGraph(pixels, 0, name);
+                CHECK(graphWrong == 0, "%s%s: %d cells of the graph are not as they should be", name, inScene ? " (in a scene)" : "", graphWrong);
                 const size_t changed = ChangedOutsidePlates(pixels, NULL);
                 CHECK(changed == 0, "%s: %zu pixels outside the plates changed", name, changed);
                 if (!inScene)
@@ -494,6 +634,92 @@ static void CheckDevice(const char* folder, bool ex)
             }
         }
     }
+
+    // a headset of 90 Hz: the digits and the line take their colours from the rates, and the line is scaled to its lowest and highest sample
+    SetHeadset(true);
+    for (int moved = 0; moved < 2; moved++) {
+        SetPose(moved != 0);
+        char name[64];
+        // a second at 90, a second at 45 and a second at 72: green, red and yellow, the lowest sample at the bottom of the plot and the highest at the top
+        snprintf(name, sizeof(name), "mixed_%s", moved ? "moved" : "still");
+        StartOver();
+        Frames(90, kPerSecond / 90);
+        Frames(45, kPerSecond / 45);
+        Frames(72, kPerSecond / 72);
+        prepare();
+        FpsCounterDraw(device);
+        CHECK(ReadBack(device, backBuffer, copy, pixels), "read back");
+        int wrong = CheckGraph(pixels, 90, name);
+        CHECK(wrong == 0, "%s: %d cells of the graph are not as they should be", name, wrong);
+        wrong = CheckFigure(pixels, FpsCounterShown(), name, FpsCounterColor(FpsCounterShown(), 90) & 0xFFFFFF);
+        CHECK(wrong == 0, "%s: the figure %d is not in its colour (%d font pixels)", name, FpsCounterShown(), wrong);
+        const D3DCOLOR want[3] = {FpsCounterColor(90, 90), FpsCounterColor(72, 90), FpsCounterColor(45, 90)};
+        bool seen[3] = {};
+        for (int eye = 0; eye < 2; eye++) {
+            int top, bottom;
+            CHECK(GraphExtent(pixels, eye, &top, &bottom) && top == 0 && bottom == kFpsGraphRows - 1, "%s eye %d: the line runs from the top of the plot to the bottom (%d to %d)", name, eye, top, bottom);
+            for (int column = 0; column < kFpsGraphColumns; column++)
+                for (int row = 0; row < kFpsGraphRows; row++)
+                    for (int k = 0; k < 3; k++)
+                        seen[k] = seen[k] || Near(GraphCell(pixels, eye, column, row), want[k] & 0xFFFFFF, 3);
+        }
+        CHECK(seen[0] && seen[1] && seen[2], "%s: the line is green, yellow and red (%d %d %d)", name, seen[0], seen[1], seen[2]);
+        CHECK(!Near(want[0], want[1], 40) && !Near(want[1], want[2], 40), "the three colours differ");
+        if (!moved)
+            SavePanel(pixels, folder, name);
+
+        // a steady rate is a flat line in the middle of the plot, not a storm
+        snprintf(name, sizeof(name), "steady_%s", moved ? "moved" : "still");
+        StartOver();
+        Frames(180, kPerSecond / 90);
+        prepare();
+        FpsCounterDraw(device);
+        CHECK(ReadBack(device, backBuffer, copy, pixels), "read back");
+        wrong = CheckGraph(pixels, 90, name);
+        CHECK(wrong == 0, "%s: %d cells of the graph are not as they should be", name, wrong);
+        for (int eye = 0; eye < 2; eye++) {
+            int top, bottom;
+            CHECK(GraphExtent(pixels, eye, &top, &bottom) && bottom - top + 1 == kFpsGraphThickness && top + bottom == kFpsGraphRows - 1,
+                  "%s eye %d: a steady rate is a flat line in the middle of the plot (rows %d to %d)", name, eye, top, bottom);
+        }
+        if (!moved)
+            SavePanel(pixels, folder, name);
+
+        // a rate that hardly changes (90, 88, 90) stays a short wiggle in the middle: the scale spans a tenth of the highest sample at least, whatever the samples are
+        snprintf(name, sizeof(name), "nearly_steady_%s", moved ? "moved" : "still");
+        StartOver();
+        Frames(90, kPerSecond / 90);
+        Frames(88, kPerSecond / 88);
+        Frames(90, kPerSecond / 90);
+        prepare();
+        FpsCounterDraw(device);
+        CHECK(ReadBack(device, backBuffer, copy, pixels), "read back");
+        wrong = CheckGraph(pixels, 90, name);
+        CHECK(wrong == 0, "%s: %d cells of the graph are not as they should be", name, wrong);
+        for (int eye = 0; eye < 2; eye++) {
+            int top, bottom;
+            CHECK(GraphExtent(pixels, eye, &top, &bottom) && bottom - top + 1 <= kFpsGraphThickness + 5 && abs(top + bottom - (kFpsGraphRows - 1)) <= 2,
+                  "%s eye %d: a rate that hardly changes stays near the middle of the plot (rows %d to %d)", name, eye, top, bottom);
+        }
+
+        // a full graph: 23 seconds of a rate that goes up and down
+        snprintf(name, sizeof(name), "full_%s", moved ? "moved" : "still");
+        StartOver();
+        for (int k = 0; k < 24; k++) {
+            Frames(40 + 3 * (k % 5), kPerSecond / (50 + 10 * (k % 5)));
+            Frames(25, kPerSecond / 90);
+        }
+        prepare();
+        FpsCounterDraw(device);
+        CHECK(ReadBack(device, backBuffer, copy, pixels), "read back");
+        float samples[kFpsGraphColumns];
+        CHECK(FpsCounterGraph(samples, kFpsGraphColumns) == kFpsGraphColumns, "the graph is full");
+        wrong = CheckGraph(pixels, 90, name);
+        CHECK(wrong == 0, "%s: %d cells of the graph are not as they should be", name, wrong);
+        if (!moved)
+            SavePanel(pixels, folder, name);
+    }
+    SetHeadset(false);
 
     // the same picture whatever the head does: the panel is where the eyes are, not where the car is
     {
@@ -541,6 +767,7 @@ int main(int argc, char** argv)
 {
     const char* folder = argc > 1 && argv[1][0] ? argv[1] : NULL;
     CheckCounting();
+    CheckSamples();
     CheckColours();
     CheckFont();
     CheckDevice(folder, false);

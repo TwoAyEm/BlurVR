@@ -40,6 +40,11 @@ static long long g_lastFrame = 0;
 static int g_windowFrames = 0;      // frames since then
 static int g_shown = 0;             // frames a second, as the last window measured them (0 = none yet)
 static double g_refreshHz = 0;      // the headset's, read whenever a new figure is taken (0 = not known)
+static long long g_graphStart = 0;  // the same for the graph's samples, which come four times a second
+static int g_graphFrames = 0;
+static float g_graph[kFpsGraphColumns]; // frames a second, the oldest first
+static int g_graphCount = 0;
+static double HeadsetRefreshHz();
 
 void FpsCounterFrameAt(long long ticks, long long perSecond)
 {
@@ -48,6 +53,9 @@ void FpsCounterFrameAt(long long ticks, long long perSecond)
         g_windowStart = g_lastFrame = ticks;
         g_windowFrames = 0;
         g_shown = 0;
+        g_graphStart = ticks;
+        g_graphFrames = 0;
+        g_graphCount = 0;
         return;
     }
     g_lastFrame = ticks;
@@ -58,12 +66,32 @@ void FpsCounterFrameAt(long long ticks, long long perSecond)
         g_shown = fps < 999 ? fps : 999;
         g_windowStart = ticks;
         g_windowFrames = 0;
+        g_refreshHz = HeadsetRefreshHz();
+    }
+    g_graphFrames++;
+    const long long graphElapsed = ticks - g_graphStart;
+    if (graphElapsed >= (long long)(perSecond * kFpsGraphSampleSeconds)) { // (a sample of its own, over a shorter time than the figure so that a hitch shows)
+        const double rate = (double)g_graphFrames * (double)perSecond / (double)graphElapsed;
+        if (g_graphCount == kFpsGraphColumns) {
+            memmove(g_graph, g_graph + 1, (kFpsGraphColumns - 1) * sizeof(float));
+            g_graphCount--;
+        }
+        g_graph[g_graphCount++] = (float)(rate < 999.0 ? rate : 999.0);
+        g_graphStart = ticks;
+        g_graphFrames = 0;
     }
 }
 
 int FpsCounterShown()
 {
     return g_shown;
+}
+
+int FpsCounterGraph(float* samples, int capacity)
+{
+    const int count = g_graphCount < capacity ? g_graphCount : capacity;
+    memcpy(samples, g_graph + (g_graphCount - count), count * sizeof(float));
+    return count;
 }
 
 static double HeadsetRefreshHz()
@@ -83,8 +111,6 @@ void FpsCounterFrame()
     if (!QueryPerformanceCounter(&now) || !QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0)
         return;
     FpsCounterFrameAt(now.QuadPart, frequency.QuadPart);
-    if (g_windowFrames == 0 && g_shown > 0) // (a new figure was just taken)
-        g_refreshHz = HeadsetRefreshHz();
 }
 
 D3DCOLOR FpsCounterColor(int fps, double refreshHz)
@@ -106,9 +132,14 @@ struct PanelVertex {
 struct FontRect { // font pixels, from the plate's top left corner
     int x0, y0, x1, y1;
 };
+struct GraphRect { // cells of the graph, from the top left corner of its plate
+    int x0, y0, x1, y1;
+    DWORD color;
+};
 static const int kMaxTextRects = 6 * kFpsGlyphHeight * 3; // (a row of a glyph has at most 3 runs of lit pixels)
 static FontRect g_textRects[kMaxTextRects];
-static PanelVertex g_vertices[(1 + kMaxTextRects) * 6];
+static GraphRect g_graphRects[kFpsGraphColumns];
+static PanelVertex g_vertices[(1 + kMaxTextRects + kFpsGraphColumns) * 6];
 static IDirect3DStateBlock9* g_stateBlock = NULL;
 static bool g_failed = false, g_announced = false, g_drawFailureLogged = false;
 
@@ -143,6 +174,47 @@ static int BuildTextRects(int fps, FontRect* out)
     addGlyph('P', labelLeft + kFpsAdvance);
     addGlyph('S', labelLeft + 2 * kFpsAdvance);
     return count;
+}
+
+// The line as rectangles: a column of cells for each sample, from the height of the sample to the height of the next one so that the line is joined up.  The scale runs from the
+// lowest sample to the highest (a span of at least kFpsGraphMinSpan of the highest, centred on the samples).  Neighbouring columns that look alike are one rectangle.
+static int BuildGraphRects(GraphRect* out)
+{
+    const int count = g_graphCount;
+    if (count <= 0)
+        return 0;
+    double low = g_graph[0], high = g_graph[0];
+    for (int i = 1; i < count; i++) {
+        low = fmin(low, g_graph[i]);
+        high = fmax(high, g_graph[i]);
+    }
+    const double minSpan = fmax(high * kFpsGraphMinSpan, 1.0);
+    if (high - low < minSpan) {
+        const double middle = (low + high) / 2.0;
+        low = middle - minSpan / 2.0;
+        high = middle + minSpan / 2.0;
+    }
+    int levels[kFpsGraphColumns];
+    for (int i = 0; i < count; i++) {
+        const int level = (int)floor((g_graph[i] - low) / (high - low) * (kFpsGraphLevels - 1) + 0.5);
+        levels[i] = level < 0 ? 0 : level > kFpsGraphLevels - 1 ? kFpsGraphLevels - 1 : level;
+    }
+    int rects = 0;
+    for (int i = 0; i < count; i++) {
+        const int next = i + 1 < count ? i + 1 : i;
+        const int topOfThis = kFpsGraphLevels - 1 - levels[i], topOfNext = kFpsGraphLevels - 1 - levels[next]; // (cells from the top of the plot to the top of the line)
+        GraphRect r;
+        r.x0 = kFpsGraphMarginX * kFpsGraphCell + (kFpsGraphColumns - count + i);
+        r.x1 = r.x0 + 1;
+        r.y0 = kFpsGraphMarginY * kFpsGraphCell + (topOfThis < topOfNext ? topOfThis : topOfNext);
+        r.y1 = kFpsGraphMarginY * kFpsGraphCell + (topOfThis > topOfNext ? topOfThis : topOfNext) + kFpsGraphThickness;
+        r.color = FpsCounterColor((int)(fmin(g_graph[i], g_graph[next]) + 0.5), g_refreshHz);
+        if (rects && out[rects - 1].x1 == r.x0 && out[rects - 1].y0 == r.y0 && out[rects - 1].y1 == r.y1 && out[rects - 1].color == r.color)
+            out[rects - 1].x1 = r.x1;
+        else
+            out[rects++] = r;
+    }
+    return rects;
 }
 
 void ReleaseFpsCounter()
@@ -229,6 +301,7 @@ void FpsCounterDraw(IDirect3DDevice9* device)
     setRenderState(device, D3DRS_SCISSORTESTENABLE, TRUE);
 
     const int textCount = BuildTextRects(g_shown, g_textRects);
+    const int graphCount = BuildGraphRects(g_graphRects);
     const DWORD plateColor = D3DCOLOR_ARGB(150, 0, 0, 0), textColor = FpsCounterColor(g_shown, g_refreshHz);
     const double scale = g_cfg.positionScale > 0.01 ? g_cfg.positionScale : 1.0; // (head space is in game units: positionScale of them to the metre, like the eye offsets)
     const double bw = g_backBufferWidth, bh = g_backBufferHeight, eyeW = bw / 2.0;
@@ -240,7 +313,7 @@ void FpsCounterDraw(IDirect3DDevice9* device)
         const double tanWidth = fmax(1e-3, box.right - box.left), tanHeight = fmax(1e-3, box.up + box.down);
         // a font pixel corner -> a pixel of this eye's picture
         bool visible = true;
-        auto place = [&](int cellX, int cellY, PanelVertex& v, DWORD color) {
+        auto place = [&](double cellX, double cellY, PanelVertex& v, DWORD color) {
             const double z = kFpsDistance * scale;
             const double x = (kFpsCentreX + (cellX - kFpsPlateWidth / 2.0) * kFpsPixelTan) * z;
             const double y = (kFpsCentreY - (cellY - kFpsPlateHeight / 2.0) * kFpsPixelTan) * z;
@@ -256,12 +329,12 @@ void FpsCounterDraw(IDirect3DDevice9* device)
             v.color = color;
         };
         int vertexCount = 0;
-        auto addRect = [&](const FontRect& r, DWORD color) {
+        auto addRect = [&](double x0, double y0, double x1, double y1, DWORD color) { // (in font pixels from the top left corner of the panel)
             PanelVertex a, b, c, d; // top left, top right, bottom left, bottom right
-            place(r.x0, r.y0, a, color);
-            place(r.x1, r.y0, b, color);
-            place(r.x0, r.y1, c, color);
-            place(r.x1, r.y1, d, color);
+            place(x0, y0, a, color);
+            place(x1, y0, b, color);
+            place(x0, y1, c, color);
+            place(x1, y1, d, color);
             g_vertices[vertexCount++] = a;
             g_vertices[vertexCount++] = b;
             g_vertices[vertexCount++] = c;
@@ -269,9 +342,13 @@ void FpsCounterDraw(IDirect3DDevice9* device)
             g_vertices[vertexCount++] = d;
             g_vertices[vertexCount++] = c;
         };
-        addRect({0, 0, kFpsPlateWidth, kFpsPlateHeight}, plateColor);
+        addRect(0, 0, kFpsPlateWidth, 2 * kFpsPlateHeight, plateColor); // (one plate behind the figure and the graph under it)
         for (int i = 0; i < textCount; i++)
-            addRect(g_textRects[i], textColor);
+            addRect(g_textRects[i].x0, g_textRects[i].y0, g_textRects[i].x1, g_textRects[i].y1, textColor);
+        for (int i = 0; i < graphCount; i++) {
+            const GraphRect& r = g_graphRects[i];
+            addRect((double)r.x0 / kFpsGraphCell, kFpsPlateHeight + (double)r.y0 / kFpsGraphCell, (double)r.x1 / kFpsGraphCell, kFpsPlateHeight + (double)r.y1 / kFpsGraphCell, r.color);
+        }
         if (!visible)
             continue;
         RECT clip;
