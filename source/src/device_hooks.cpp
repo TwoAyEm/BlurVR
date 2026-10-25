@@ -8,6 +8,7 @@
 #include "device_state.h"
 #include "display_modes.h"
 #include "draw_dispatch.h"
+#include "fps_counter.h"
 #include "game_camera.h"
 #include "game_mode.h"
 #include "hud.h"
@@ -106,6 +107,7 @@ static HRESULT STDMETHODCALLTYPE H_Reset(IDirect3DDevice9* d, D3DPRESENT_PARAMET
     ReleaseMirrorStereo();
     ReleasePhotoStereo();
     ReleaseDesktopMessage();
+    ReleaseFpsCounter();
     g_renderTargetTextures.clear();
     AdjustPresentParams(pp, true);
     if (pp)

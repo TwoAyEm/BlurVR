@@ -5,6 +5,7 @@
 #include "display_modes.h"
 #include "core.h"
 #include "draw_dispatch.h"
+#include "fps_counter.h"
 #include "frame_dump.h"
 #include "game_mode.h"
 #include "hud.h"
@@ -608,6 +609,13 @@ static void PollSwitchKeys()
     if (perfDown && !perfWasDown)
         PerfToggle();
     perfWasDown = perfDown;
+    static bool fpsWasDown = false;
+    bool fpsDown = g_cfg.keyFps && (GetAsyncKeyState(g_cfg.keyFps) & 0x8000) != 0;
+    if (fpsDown && !fpsWasDown) {
+        g_cfg.fpsCounter = g_cfg.fpsCounter ? 0 : 1;
+        Log("switch: FPS counter = %d", g_cfg.fpsCounter);
+    }
+    fpsWasDown = fpsDown;
 }
 
 bool VrShowEyeOnDesktop(IDirect3DDevice9* device, RECT* presented)
@@ -671,11 +679,14 @@ void VrSubmitFrame(IDirect3DDevice9* device)
         UpdateMovieState(g_sceneDrawsThisFrame > 0);
     else
         UpdateMovieState(true); // loading screens: no movie state to keep
+    FpsCounterFrame();
     PerfSetPhase(device, PH_HUD_COMPOSE);
     {
         PerfScope perfCompose(PS_COMPOSE);
         ComposeHudLayers(device);
     }
+    if (g_cfg.fpsCounter && IsRaceMode() && g_sceneDrawsThisFrame > 0) // (race frames only: a menu frame is a flat picture, not a pair of eyes)
+        FpsCounterDraw(device);
     NoteSceneBloom(NULL); // the game's glow buffer is only valid for the frame it was drawn in
     g_menuGlowFrame = IsRaceMode(); // the game's UI glow is kept in the race too (HUD, pause, restart, car selector)
     g_hudDrawsThisFrame = 0;

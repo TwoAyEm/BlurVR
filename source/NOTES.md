@@ -324,7 +324,7 @@ where `ReadIniInt(..., oldSection)` says so: Stereo, ForceNoVSync, SharedTranspo
 `[Input]` (VR and flat) KeyRepeatMs (60 ms; 0 = off): menu key repeat limiter, `input_limiter.cpp` (section 19).
 `[VR]` (ignored when flat) Resolution (WxH, 2160x1200; `CustomWidth`/`CustomHeight` of `[Render]` are read when it is missing), Bloom (100 %: the game's glow around
 menus, UI and loading screens; 0 = none), NoLensFlare (0; 1 drops the flare sprites and the bloom/glow around lights), SharedTransport (1, section 15),
-DesktopView (off; left / right / both; 1 / 2 / 0 / 3 still read, section 20), DesktopPresentEvery (1, section 18), FitDesktopWindow (1).
+DesktopView (off; left / right / both; 1 / 2 / 0 / 3 still read, section 20), DesktopPresentEvery (1, section 18), FitDesktopWindow (1), FpsCounter (0, section 27).
 `[Tracking]` Rotation, Position, PositionScale (game units per metre), IpdScale.
 `[Render]` (VR only) FovScale, SeamGutter (0); undocumented tuning: MainPassMinWidthFraction (0.9), RequireDepthBuffer, HalfResPasses, ReflectionLookupFix,
 ReflectionFlip; `[Hud]` CoverageEvery (8, section 18).
@@ -333,7 +333,7 @@ MirrorConvergence (1.5), MirrorEyeScale (1), MirrorHeadParallax (1),
 VeilRace, VeilResults, VeilMenu, DimStrongPct, CountInDrop (1), DropBackdrop, HideFullscreenOverlay.
 `[Menu]` Distance, Width, HeightOffset.
 `[Matrix]` Layout (`auto`|`row`|`transposed`).
-`[Debug]` KeyMirror3D (Num6), KeyPerf (Num7), KeyDump (Num8; section 16), AdjustViewRotation.
+`[Debug]` KeyMirror3D (Num6), KeyPerf (Num7), KeyDump (Num8; section 16), KeyFps (Num9; section 27), AdjustViewRotation.
 `[Perf]` Enabled (0; the probe in section 13).
 `[Foveation]` Report (1; the lens analysis in section 13).
 
@@ -422,6 +422,7 @@ callback type; each module header lists what the module exports (with one-line c
 | `perf_probe` | Timing probe (section 13): GPU time per rendering phase from timestamp queries, CPU time of the draw hooks and the present path. | `PerfToggle`, `PerfSetPhase`, `PerfClassifyDraw`, `PerfFrameClose`, `PerfPoll`, `PerfScope`, `PerfDrawScope`, `PerfDriverScope` |
 | `lens_model` | Lens analysis (section 13): pixel need across the flat image, hidden area, focus/context layout costs. | `StartLensReportThread` |
 | `frame_dump` | Numpad 8 saves the picture sent to the headset and the HUD/top/multiply layers as .bmp files (section 16, 19). | `FrameDumpPoll` |
+| `fps_counter` | The FPS counter in the headset (section 27): frames a second counted from `VrSubmitFrame`, a head-locked panel (plate and a built-in 5 x 7 pixel font as solid rectangles) drawn into both eyes of race frames. | `FpsCounterFrame`, `FpsCounterFrameAt`, `FpsCounterDraw`, `FpsCounterColor`, `FpsCounterGlyph`, `ReleaseFpsCounter` |
 | `inline_hook` | A minimal x86 inline hook for functions in the game's own code (`InstallInlineHook`: checks the expected bytes, copies them to a trampoline, patches a jump), and the patch of an entry in the executable's import table. | `InstallInlineHook`, `PatchImport` |
 | `game_signatures` | Finds the game's two camera hand-over functions in the code of any build by wildcarded byte patterns (section 25); pure code, also used by `tools/camera_sig_check.py`. | `InitGameCameraScan`, `ScanForGameCameraCode`, `ResolveGameCameraCode` |
 | `game_camera` | Hooks on the game's camera hand-over to its views (section 25): the game culls with a frustum around the head (VR only), once the main camera is recognised and the frustum layout checked; the planar reflection view gets one around the mirrored head. | `GameCameraPoll`, `GetMainCameraPose`, `ReflectionFlipAxis` |
@@ -1220,3 +1221,39 @@ needed: the pictures sit at their slots). The patch of the skip, the detour and 
 every register; which markers the detour sees as drawn; the slots (tiling, no overlap, the world position that projects to the slot's pixel and depth, also for a turned and moved camera); the game's camera on the stack (read, refused when it is not a camera or far from the given one,
 the cars kept relative to it); the yaw flag held off and put back; the pick by head (the nearest car in the cone, the limit, the cone, the 15 % bonus); the geometry (clamps, the billboard flat to the head, a car behind the camera); the device calls (quads per eye, the order, the fills of
 the layer and of the glow); the HUD sway held at rest; a wrong car number giving the detour up. `tools/camera_sig_check.py` prints what the scan finds in a Blur.exe or a dump of the running module (`AI HUD: ... billboard flag found`).
+
+## 27. The FPS counter in the headset (`[VR] FpsCounter`, default 0; numpad 9 in game)
+
+**What it shows.** A small panel in both eyes of a race frame with the number of frames the game presents a second (`62 FPS`).  `WaitGetPoses` runs right after `Present` (section 7), so the game is paced by the headset: at 90 Hz the counter reads 90 while the PC keeps up
+and 45 when SteamVR has to hold the game to half the rate.  It counts what the game delivers to SteamVR, not what the headset displays (reprojection or motion smoothing are not seen).
+
+**Counting** (`FpsCounterFrame`, called at the top of `VrSubmitFrame` for every presented frame while the counter is on).  A window opens at a frame and closes at the first frame at least half a second later; the figure is the number of frame intervals in it divided by the
+time they took (`QueryPerformanceCounter`), rounded, and it stays until the next window closes: two updates a second, no flicker.  A gap of two seconds or more (the counter was just switched on, a level was loading) starts over and shows nothing until a window is full; a hitch
+of a second and a half only lowers the figure.  The largest figure is 999.  `FpsCounterFrameAt` takes the clock as arguments so that the host check can feed it frames.
+
+**Colour** (`FpsCounterColor`).  Against the headset's refresh rate (`Prop_DisplayFrequency_Float`, asked each time a new figure is taken): green from 95 percent of it, yellow from 70 percent, red below; white when the refresh rate is not known.
+
+**Drawing** (`FpsCounterDraw`, from `VrSubmitFrame` after `ComposeHudLayers` and before the copy to the headset; race frames only: `IsRaceMode()` and 3D draws in the frame).  The plate and the text are solid-colour rectangles, one `DrawPrimitiveUP` per eye, with no
+texture and no system font: the digits (right-aligned, room for three) and the label `FPS` are a built-in 5 x 7 pixel font of 13 glyphs (`kGlyphs`), and each run of lit pixels in a row is one rectangle (40 to 60 a frame with the plate).  The plate is 41 x 11 font pixels; a font pixel is 0.005 as a
+tangent (0.29 degrees), so the text is 2 degrees tall and the plate 11.7 x 3.1 degrees, centred 0.34 to the left and 0.30 below straight ahead (about 19 and 17 degrees), at 1.5 m (`kFps...` in `fps_counter.h`).
+
+**Why it stays put.**  `eyeCameraDelta[eye]` goes from the game camera's space to the eye's and holds the head's pose (it is `headDelta * headToEye`, section 3), and `eyeCameraDelta[2]` is the head's part alone.  A point in head space therefore goes to the camera's space with the
+inverse of `eyeCameraDelta[2]` and into the eye with `eyeCameraDelta[eye]`, and then through the eye's tangent box like the HUD panel (`drawLayerQuads`).  The two eyes get their own offsets (and a canted display its turn) from SteamVR's eye transform, the numbers the scene uses, so the
+panel is an object at 1.5 m, not an overlay at infinity.  Head tracking off (F10) makes `eyeCameraDelta[2]` the identity and the panel sits at the same place in the view.
+
+**State.**  Like `ComposeHudLayers`: a `D3DSBT_ALL` state block of its own (made at the first draw, released by `ReleaseFpsCounter` in `H_Reset`) captures what the game set, everything the mod tracks is set through the original functions (`g_deviceOriginals`) so the tracking never
+sees it, and afterwards the state block, the render target, the viewport and the scissor are put back.  The blend leaves the picture's alpha alone (separate alpha blend, zero and one).  The mod itself never calls `BeginScene` (the HUD is drawn at the same point and works), but if the draw
+fails the counter opens a scene, draws again and closes it, and the log line says so (`FPS counter: first panel drawn (...)`, with `in a scene of its own`; `drawing the panel failed 0x...` when both fail).
+
+**Not drawn:** in menus and loading screens (a menu frame is a flat picture for the floating screen, not a pair of eyes) and with `Stereo=0` (`LoadConfig` sets `fpsCounter` to 0 then).  In the window on the desktop with `DesktopView` left, right or both the panel is in the picture, as part of the
+headset's image; with `DesktopView=off` nothing of it is.
+
+**Switch.**  `[VR] FpsCounter` for the start; `[Debug] KeyFps` (0x69, numpad 9) flips it live and writes `switch: FPS counter = n`.  Off, the cost is one branch in `VrSubmitFrame` and the key poll; on, a clock read a frame and, in races, a state block capture and apply (the same
+as the HUD composition's) and two small draws.  The cost was not measured in the headset.
+
+**Checks.**  `tools/fps_counter_check.py` (`--pictures folder` writes the panel as .bmp files).  It feeds frames of 7 to 144 a second, uneven ones, 5000 a second (limit), a gap and a hitch; checks the colours at 90 and 120 Hz and that the 13 glyphs exist, differ and are 5 wide; and on a real
+Direct3D 9 and 9Ex device (a 3200 x 1600 back buffer, 90 degree eyes) decodes the figure (62, 7, 100, 999, 45) font pixel by pixel in both eyes at the place the layout says, for a still head and for one turned 20 and 12 degrees and moved, drawn outside a scene and inside one.  It also checks
+that a turned head gives the same picture, that no pixel outside the two plates changes, that the device state (render states, FVF, texture stage, viewport, scissor, render target) is as it was, that the counter off, with no figure or without a pose leaves the picture untouched, and that
+it draws again after `ReleaseFpsCounter`.  Each of: the head lock left out, the eyes swapped, the digits left-aligned, the state block not applied, and no scene of its own makes the check fail (tried on copies of the source).
+
+**Still open:** it was not run in the headset: whether the game's `Present` comes inside or after its scene (the log line says), how it reads at 4032 x 2240 on a real headset, and the frame cost.

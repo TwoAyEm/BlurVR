@@ -76,6 +76,7 @@ In VR the size is kept in `BlurVR.ini` (`[VR] Resolution=WxH`): the game starts 
 | **Num6** | 3D rear-view mirror on/off (same as `Mirror3D` in the ini) |
 | **Num7** | Timing probe on/off (see [Troubleshooting](#troubleshooting)) |
 | **Num8** | Save what the headset sees as picture files (see [Troubleshooting](#troubleshooting)) |
+| **Num9** | FPS counter on/off (same as `FpsCounter` in the ini) |
 
 ## Settings
 
@@ -148,6 +149,7 @@ Blur counts how long a key is held in frames and, after a second, repeats it eve
 | `DesktopView` | `off` | What the window on the desktop shows: `off` = no picture of the game at all: the window says "Playing in VR" with the game's logo (also in the menus and while loading) and is painted twice a second, which saves the GPU the copy of the game's picture. `left` = the left eye's view in a race (cropped to the window's shape and drawn at the window's own size, which is cheap), `right` = the right eye's, `both` = the whole side-by-side picture. The headset's picture is not affected. `off` needs a windowed game without multisampling (otherwise the window shows the left eye's view). Before 1.5 the default was `left`. |
 | `DesktopPresentEvery` | `1` | In a race, the window on the desktop (a mirror of the headset) really updates only every n-th frame (2-4 saves a little GPU time; 1 = every frame) |
 | `FitDesktopWindow` | `1` | 1 = the game's window is never made bigger than the work area of its monitor (at a 3840x2160 setting it would cover the whole desktop, or two monitors). The game still renders at the size it chose; the window shows one eye's view of it scaled to fit (`DesktopView`). Windowed mode only. 0 = as the game wants. |
+| `FpsCounter` | `0` | 1 = a small panel in the headset shows how many frames a second the game presents (in races; **Num9** switches it in game). It stays in front of your face, a little to the lower left, and is green at the headset's refresh rate, yellow below it and red far below (a game that SteamVR holds to half the headset's rate shows red). Off by default |
 
 ### `[Render]`  (VR only)
 
@@ -195,6 +197,7 @@ The floating screen in menus.
 | `KeyMirror3D` | `0x66` (Num6) | Key for the 3D mirror switch |
 | `KeyPerf` | `0x67` (Num7) | Key for the timing probe switch |
 | `KeyDump` | `0x68` (Num8) | Key for saving the headset picture as files |
+| `KeyFps` | `0x69` (Num9) | Key for the FPS counter switch |
 | `AdjustViewRotation` | `1` | |
 
 ### `[Culling]`  (VR only)
@@ -265,6 +268,10 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **The HUD no longer sways with the car's acceleration** in the headset (the game moves, scales and turns the whole HUD with it, which would shift the markers). It stays at rest.
 - The markers have no settings and run only in VR (`Stereo=1`). BlurVR finds the game's code for them by what it looks like, as for the camera in 1.3 (tried so far: the Steam build and a non-Steam build), and checks it before it changes anything; if something is not as expected the markers stay on the HUD panel as in 1.4, and `BlurVR.log` says why (`ai hud: ...` lines).
 
+**FPS counter**
+
+- **New, off by default: an FPS counter in the headset.** `[VR] FpsCounter=1` (or **Num9** in game) puts a small panel, `62 FPS`, in front of your face in races: the number of frames the game presents a second, refreshed twice a second. It is green when the game keeps up with the headset's refresh rate, yellow below it and red far below. It is part of the picture sent to the headset (also in the window on the desktop with `DesktopView` left, right or both) and is not shown in menus, nor with `Stereo=0`.
+
 **Desktop window**
 
 - **`DesktopView=off`, the new default.** The window on the desktop says "Playing in VR" with the game's logo (taken from `Blur.exe`) instead of showing a mirror of the headset, in the menus and loading screens too. Nothing of the game's picture is copied to it: the window is painted twice a second, which saves the graphics card the work of the mirror. It is still the game's window (it keeps the keyboard focus and closing it quits the game). Needs a windowed game without multisampling; otherwise the window shows the left eye's view and `BlurVR.log` says why. `left`, `right` and `both` work as before, and an older `BlurVR.ini` that has a `DesktopView` line keeps it; set `DesktopView=left` to get the mirror back.
@@ -277,7 +284,7 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 **Other**
 
 - **The flat display mode is put back when the game exits.** In 1.4 this only happened at the next start: Blur ends with `TerminateProcess`, which skipped BlurVR's exit code, so after every VR run `settings.xml` still held the VR size and `BlurVR.log` began with "the last VR run did not end properly". BlurVR now hooks that call and restores the flat size first (a game that is killed from outside is still repaired at the next start).
-- Building from source needs `-lgdi32` (the message window is drawn with GDI); `build.bat` and `build.sh` have it. New host checks in `source\tools`: `ai_hud_check.py`, `desktop_message_check.py`, `exit_restore_check.py` and `reflection_cull_check.py`.
+- Building from source needs `-lgdi32` (the message window is drawn with GDI); `build.bat` and `build.sh` have it. New host checks in `source\tools`: `ai_hud_check.py`, `desktop_message_check.py`, `exit_restore_check.py`, `fps_counter_check.py` and `reflection_cull_check.py`.
 
 ### Version 1.4
 
