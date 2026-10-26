@@ -390,6 +390,14 @@ int main()
                 g_vr.eyeCameraDelta[e] = head;
                 g_vr.eyeCameraDelta[e].m[3][0] = headT[0] + (e ? -0.035 : 0.035);
             }
+            if (n & 1) { // the showroom as the game's file opens tell it: a 3D scene is up and the level is "showroom"
+                g_modeOverride = 0;
+                g_levelFilesSeen = true;
+                g_levelLoading = false;
+                strcpy(g_currentLevel, "showroom");
+            } else {
+                g_modeOverride = 2; // a race
+            }
             CameraSnapshot found;
             if (!SnapshotFromDescription(description, found)) {
                 CHECK(false, "the reflection camera was not found in its frustum (n %d)", n);
@@ -424,7 +432,10 @@ int main()
             else
                 CHECK(false, "the frustum handed to the game misses part of the mirrored eyes' view (n %d)", n);
         }
-        printf("chain: %u of 200 frustums rewritten, %u of them contain the mirrored eyes' view\n", chains, contained);
+        g_modeOverride = 2;
+        g_levelFilesSeen = false;
+        g_currentLevel[0] = 0;
+        printf("chain: %u of 200 frustums rewritten, %u of them contain the mirrored eyes' view (half of the chains are a race's, half the showroom's)\n", chains, contained);
     }
     if (g_failures) {
         printf("reflection_cull_check: %d failure(s)\n", g_failures);

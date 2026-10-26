@@ -121,12 +121,14 @@ static int ClassifyDraw(IDirect3DDevice9* device)
     }
     if ((IsMainPass() || IsHalfResPass()) && g_currentVsInfo && !g_currentVsInfo->tracked.empty()) {
         bool ok = false, hasOther = false;
+        const float* viewProjRegisters = NULL;
         for (const TrackedConstant& tracked : g_currentVsInfo->tracked) {
             if (tracked.reg + 4 > 256)
                 continue;
             if (tracked.kind == TK_ViewProj) {
                 if (TryRecoverProjection(&g_vsConstants[tracked.reg * 4])) {
                     ok = true;
+                    viewProjRegisters = &g_vsConstants[tracked.reg * 4];
                     break;
                 } else if (g_decomposeFailLogs < 4) {
                     g_decomposeFailLogs++;
@@ -140,8 +142,11 @@ static int ClassifyDraw(IDirect3DDevice9* device)
                        tracked.kind == TK_Projection || tracked.kind == TK_View)
                 hasOther = true;
         }
-        if (ok && IsMainPass())
-            NoteMainCameraAxes();
+        if (ok && IsMainPass()) {
+            NoteMainSizedCamera(viewProjRegisters);
+            if (!IsMainSizedReflectionTarget()) // (the mirrored camera of a reflection drawn into a target as big as the picture is not the main one)
+                NoteMainCameraAxes();
+        }
         if (ok || (hasOther && g_haveProjection)) {
             g_sceneDrawsThisFrame++;
             return 1;

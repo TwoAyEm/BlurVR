@@ -1,6 +1,10 @@
 // What the game is rendering into right now (render target, viewport, scissor, bound textures) and classification of the current pass (main scene, half-size, reflection).
 #include "render_state.h"
+#include "camera.h"
 #include "config.h"
+#include "core.h"
+#include "game_camera.h"
+#include "vr_runtime.h"
 
 UINT g_rtWidth;
 UINT g_rtHeight;
@@ -109,6 +113,73 @@ bool IsReflectionSizedPass() // only the half-size planar-reflection pass gets t
         return false;
     double widthRatio = (double)g_rtWidth / g_backBufferWidth;
     return widthRatio >= 0.45 && widthRatio <= 0.55;
+}
+
+// ---- the planar reflection in a target as big as the picture ----------------------------------------------------------------------------
+static IDirect3DSurface9* g_mirroredTarget = NULL; // a main-sized target the mirrored camera draws into (pointer identity only)
+static int g_mirroredAxis = -1;
+static IDirect3DSurface9* g_testedTarget = NULL;
+static unsigned long long g_testedFrame = ~0ull;
+
+void NoteMainSizedCamera(const float* viewProj)
+{
+    if (g_renderTarget0 == g_testedTarget && g_vr.frameCount == g_testedFrame)
+        return; // (this runs for every draw of the main pass: one look at a target a frame)
+    g_testedTarget = g_renderTarget0;
+    g_testedFrame = g_vr.frameCount;
+    int axis = -1;
+    double depth = 0;
+    MainCameraPose main;
+    if (g_lastCameraAxes.valid && g_matrixLayout && viewProj && GetMainCameraPose(main) && g_vr.frameCount <= main.frame + 3) {
+        // where this draw's camera is: the translation row of the view-projection holds -position . (right, up, forward) (scaled by the projection's x and y)
+        Matrix4 matrix;
+        LoadMatrix(viewProj, g_matrixLayout, matrix);
+        const double along[3] = {-matrix.m[3][0] / g_projXScale, -matrix.m[3][1] / g_projYScale, -matrix.m[3][3]};
+        double position[3];
+        for (int i = 0; i < 3; i++)
+            position[i] = g_lastCameraAxes.right[i] * along[0] + g_lastCameraAxes.up[i] * along[1] + g_lastCameraAxes.forward[i] * along[2];
+        depth = main.pos[1] - position[1];
+        if (depth >= 0.3 && fabs(position[0] - main.pos[0]) <= 15 && fabs(position[2] - main.pos[2]) <= 15) { // (straight under the main camera, as the water is under the car)
+            const double mirrored[3][3] = {{g_lastCameraAxes.right[0], g_lastCameraAxes.right[1], g_lastCameraAxes.right[2]},
+                                           {g_lastCameraAxes.up[0], g_lastCameraAxes.up[1], g_lastCameraAxes.up[2]},
+                                           {g_lastCameraAxes.forward[0], g_lastCameraAxes.forward[1], g_lastCameraAxes.forward[2]}};
+            const double camera[3][3] = {{main.right[0], main.right[1], main.right[2]}, {main.up[0], main.up[1], main.up[2]}, {main.fwd[0], main.fwd[1], main.fwd[2]}};
+            axis = MirrorFlipAxis(mirrored, camera);
+        }
+    }
+    if (axis >= 0) {
+        static unsigned logged = 0;
+        if (g_mirroredTarget != g_renderTarget0 && logged++ < 4)
+            Log("reflection target: the %ux%u render target %p is drawn through the mirrored camera (%.1f m under the main camera, axis %c turned round): its draws are the planar reflection", g_rtWidth,
+                g_rtHeight, (void*)g_renderTarget0, depth, "XYZ"[axis]);
+        g_mirroredTarget = g_renderTarget0;
+        g_mirroredAxis = axis;
+    } else if (g_mirroredTarget && g_mirroredTarget == g_renderTarget0) {
+        g_mirroredTarget = NULL;
+        g_mirroredAxis = -1;
+    }
+}
+
+bool IsMainSizedReflectionTarget()
+{
+    return g_mirroredTarget && g_renderTarget0 == g_mirroredTarget;
+}
+
+int MainSizedReflectionAxis()
+{
+    return IsMainSizedReflectionTarget() ? g_mirroredAxis : -1;
+}
+
+bool IsReflectionPass()
+{
+    return (IsHalfResPass() && IsReflectionSizedPass()) || IsMainSizedReflectionTarget();
+}
+
+void ResetMainSizedReflectionTarget()
+{
+    g_mirroredTarget = g_testedTarget = NULL;
+    g_mirroredAxis = -1;
+    g_testedFrame = ~0ull;
 }
 
 bool IsMainPass()

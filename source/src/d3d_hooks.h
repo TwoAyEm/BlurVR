@@ -10,6 +10,7 @@ typedef HRESULT(STDMETHODCALLTYPE* PFN_Clear)(IDirect3DDevice9*, DWORD, const D3
 
 typedef HRESULT(STDMETHODCALLTYPE* PFN_SetRenderState)(IDirect3DDevice9*, D3DRENDERSTATETYPE, DWORD);
 typedef HRESULT(STDMETHODCALLTYPE* PFN_SetScissorRect)(IDirect3DDevice9*, const RECT*);
+typedef HRESULT(STDMETHODCALLTYPE* PFN_SetClipPlane)(IDirect3DDevice9*, DWORD, const float*);
 
 typedef HRESULT(STDMETHODCALLTYPE* PFN_SetRenderTarget)(IDirect3DDevice9*, DWORD, IDirect3DSurface9*);
 typedef HRESULT(STDMETHODCALLTYPE* PFN_SetTexture)(IDirect3DDevice9*, DWORD, IDirect3DBaseTexture9*);
@@ -43,6 +44,7 @@ enum DeviceVtable { // IDirect3DDevice9 vtable indices
     VT_SetRenderTarget = 37,
     VT_SetDepthStencilSurface = 39,
     VT_Clear = 43,
+    VT_SetClipPlane = 55,
     VT_SetRenderState = 57,
     VT_SetScissorRect = 75,
     VT_SetViewport = 47,

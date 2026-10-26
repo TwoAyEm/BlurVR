@@ -274,9 +274,14 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **The blur follows the direction of travel, wherever you look.** The game works its blur out for one flat picture and it was put into each eye as if you always looked straight ahead along the car, so the blur radiated from the middle of each eye's view. It is now worked out for what each eye sees: it runs along the car's direction of travel whichever way your head is turned, and a turn of your head is not blurred. (The game's own blur shaders come in two kinds, which take the depth differently; the one the game uses at its default settings has been seen working in the headset, the other kind has only been checked against a calculation.)
 - **New: `MotionBlur=0` (under `[VR]`) turns the motion blur off.** The game's blur pass then writes the picture without blur, so there is none and the pass costs a fraction of what it did, though that did not change the frame rate in a test (the game's depth of field, if a scene uses it, is part of the same pass and goes too). `1` (the default) is the game's blur as before. With `Log=1`, `BlurVR.log` has a `motion blur:` line saying which of the game's blur shaders a run uses and whether it was drawn as a copy.
 
+**Showroom**
+
+- **The floor's reflection in the menu showroom follows your head, and the car is whole in it.** The showroom draws the reflection into a picture as big as the main one, so it was treated as the main picture and followed your head up and down: looking up lost the car's reflection and turned the shadow black, looking down pinched the bottom of the floor. It is now recognised by its camera (the game's mirror camera, under the main one) and drawn like the water of a race: once for each eye, from that eye's own mirror image, held level as the flat game holds it, so it does not change as you nod and it shifts as you move your head. The car's lower half was missing from that picture for a different reason: the game cuts its reflection off at the floor with a clip plane that is fixed to its own camera, and with the picture drawn from your head that plane stayed where the game's camera had it, cutting the car away higher or lower as your head was. The plane is now carried to each eye's view. This applies to the water of a race too, where the same plane belongs to the reflection.
+
 **Other**
 
 - New host check in `source\tools`: `motion_blur_check.py` checks the motion blur (the matrix of each eye against a calculation, and the switch on a real Direct3D 9 device).
+- `hotpath_check.py` and `reflection_cull_check.py` in `source\tools` now also check the showroom's reflection: that its picture is found from its camera and drawn once for each eye, and that the game's clip plane for it follows each eye.
 
 ### Version 1.6
 

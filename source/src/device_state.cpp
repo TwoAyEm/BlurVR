@@ -16,6 +16,12 @@ static bool g_rectOverridden = false;   // the device has g_overrideRect while t
 static RECT g_overrideRect;
 static bool g_scissorUnknown = true;
 
+static float g_gameClipPlane[4];             // clip plane 0 as the game set it
+static bool g_gameClipPlaneSet = false;
+static bool g_gameClipPlaneEnabled = false;  // D3DRS_CLIPPLANEENABLE has bit 0 set
+static bool g_clipOverridden = false;        // the device has g_overrideClipPlane while the game has g_gameClipPlane
+static float g_overrideClipPlane[4];
+
 static inline bool BitSet(const Mask256 mask, UINT reg)
 {
     return (mask[reg >> 6] >> (reg & 63)) & 1;
@@ -144,6 +150,33 @@ void DeviceSetVsOverrides(IDirect3DDevice9* device, const VsWrite* writes, int c
         g_vsUnknown = false;
 }
 
+void DeviceNoteGameClipPlane(const float* plane)
+{
+    memcpy(g_gameClipPlane, plane, sizeof(g_gameClipPlane));
+    g_gameClipPlaneSet = true;
+    g_clipOverridden = false;
+}
+void DeviceNoteGameClipPlaneEnable(DWORD enable)
+{
+    g_gameClipPlaneEnabled = (enable & 1) != 0;
+}
+bool DeviceGameClipPlaneActive()
+{
+    return g_gameClipPlaneEnabled && g_gameClipPlaneSet;
+}
+const float* DeviceGameClipPlane()
+{
+    return g_gameClipPlane;
+}
+void DeviceSetEyeClipPlane(IDirect3DDevice9* device, const float* plane)
+{
+    const float* held = g_clipOverridden ? g_overrideClipPlane : g_gameClipPlane;
+    if (memcmp(held, plane, sizeof(g_gameClipPlane)) != 0)
+        ((PFN_SetClipPlane)g_deviceOriginals[VT_SetClipPlane])(device, 0, plane);
+    memcpy(g_overrideClipPlane, plane, sizeof(g_overrideClipPlane));
+    g_clipOverridden = memcmp(plane, g_gameClipPlane, sizeof(g_gameClipPlane)) != 0;
+}
+
 void DeviceNoteGameScissorEnable(bool)
 {
     g_enableOverridden = false;
@@ -188,6 +221,10 @@ void DeviceRestoreAll(IDirect3DDevice9* device)
         ((PFN_SetScissorRect)g_deviceOriginals[VT_SetScissorRect])(device, &g_gameScissorRect);
         g_rectOverridden = false;
     }
+    if (g_clipOverridden) {
+        ((PFN_SetClipPlane)g_deviceOriginals[VT_SetClipPlane])(device, 0, g_gameClipPlane);
+        g_clipOverridden = false;
+    }
     // whatever runs next may write constants or scissor state on its own: do not trust the skip logic for the next write
     g_vsUnknown = true;
     g_scissorUnknown = true;
@@ -197,5 +234,6 @@ void DeviceStateReset()
 {
     memset(g_overridden, 0, sizeof(g_overridden));
     g_enableOverridden = g_rectOverridden = false;
+    g_clipOverridden = g_gameClipPlaneSet = g_gameClipPlaneEnabled = false; // (a reset device has no clip planes)
     g_vsUnknown = g_scissorUnknown = true;
 }

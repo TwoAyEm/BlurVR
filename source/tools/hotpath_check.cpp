@@ -10,6 +10,9 @@
 //                        eyes of one game draw are summed, so their order does not matter) and at the end of each frame.
 //                        Two builds of the sources that must render identically print the same hash.
 //   micro                prints the cost of the matrix building blocks and a few helpers
+//   mirror               checks that a planar reflection drawn into a render target as big as the picture (the showroom's) is found from its camera and drawn with
+//                        exactly what the half-size reflection pass of a race gets (render_state.cpp: NoteMainSizedCamera), and that the game's clip plane for
+//                        the pass is carried to each eye (stereo_scene.cpp: ApplyEyeConstants)
 //   bench  <ns per call> replays one frame many times and prints nanoseconds per draw for each kind of draw; every call to the
 //                        device costs the given extra time (a Direct3D 9 call through the driver is around 80 ns)
 //
@@ -22,6 +25,7 @@
 #include "core.h"
 #include "d3d_hooks.h"
 #include "draw_dispatch.h"
+#include "game_camera.h"
 #include "game_mode.h"
 #include "render_state.h"
 #include "shader_tracking.h"
@@ -126,6 +130,15 @@ static HRESULT STDMETHODCALLTYPE M_SetScissorRect(IDirect3DDevice9*, const RECT*
     g_calls[3]++;
     CallCost();
     g_devScissor = *rect;
+    return D3D_OK;
+}
+static float g_devClipPlane[4]; // clip plane 0 on the device (not in the digest: only the mirror mode sets one)
+static unsigned g_clipPlaneCalls = 0;
+static HRESULT STDMETHODCALLTYPE M_SetClipPlane(IDirect3DDevice9*, DWORD index, const float* plane)
+{
+    g_clipPlaneCalls++;
+    if (index == 0)
+        memcpy(g_devClipPlane, plane, sizeof(g_devClipPlane));
     return D3D_OK;
 }
 static HRESULT STDMETHODCALLTYPE M_SetViewport(IDirect3DDevice9*, const D3DVIEWPORT9* viewport)
@@ -515,6 +528,7 @@ static void InitWorld()
     g_deviceOriginals[VT_SetPixelShaderConstantF] = (void*)M_SetPixelShaderConstantF;
     g_deviceOriginals[VT_SetRenderState] = (void*)M_SetRenderState;
     g_deviceOriginals[VT_SetScissorRect] = (void*)M_SetScissorRect;
+    g_deviceOriginals[VT_SetClipPlane] = (void*)M_SetClipPlane;
     g_deviceOriginals[VT_SetViewport] = (void*)M_SetViewport;
     g_deviceOriginals[VT_SetTexture] = (void*)M_SetTexture;
     BuildShaders();
@@ -586,6 +600,356 @@ static inline void PlayDraw(const DrawRec& rec, int& lastKind)
     }
 }
 
+// ---- a reflection pass in a target as big as the picture -----------------------------------------------------------------
+struct TestCamera {
+    double pos[3], right[3], up[3], fwd[3];
+};
+static TestCamera MakeCamera(double yaw, double pitch, double x, double y, double z)
+{
+    TestCamera c;
+    const double r[3] = {cos(yaw), 0, -sin(yaw)}, f[3] = {sin(yaw) * cos(pitch), -sin(pitch), cos(yaw) * cos(pitch)};
+    const double u[3] = {f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0]};
+    for (int i = 0; i < 3; i++) {
+        c.right[i] = r[i];
+        c.up[i] = u[i];
+        c.fwd[i] = f[i];
+    }
+    c.pos[0] = x;
+    c.pos[1] = y;
+    c.pos[2] = z;
+    return c;
+}
+// The game's planar reflection camera: position straight under the camera, the axes mirrored in the horizontal plane, and the up axis turned round to keep a proper rotation.
+// `turned` turns the other two round as well (the rear-view camera does that).
+static TestCamera MirrorOf(const TestCamera& c, double depth, bool turned)
+{
+    TestCamera m = c;
+    m.pos[1] -= depth;
+    for (int i = 0; i < 3; i++) {
+        const double sign = i == 1 ? -1.0 : 1.0;
+        m.right[i] = sign * c.right[i];
+        m.up[i] = -sign * c.up[i];
+        m.fwd[i] = sign * c.fwd[i];
+        if (turned) {
+            m.right[i] = -m.right[i];
+            m.fwd[i] = -m.fwd[i];
+        }
+    }
+    return m;
+}
+static Matrix4 ViewOf(const TestCamera& c)
+{
+    Matrix4 v = Identity();
+    for (int i = 0; i < 3; i++) {
+        v.m[i][0] = c.right[i];
+        v.m[i][1] = c.up[i];
+        v.m[i][2] = c.fwd[i];
+    }
+    const double* axes[3] = {c.right, c.up, c.fwd};
+    for (int j = 0; j < 3; j++)
+        v.m[3][j] = -(c.pos[0] * axes[j][0] + c.pos[1] * axes[j][1] + c.pos[2] * axes[j][2]);
+    return v;
+}
+static int MirrorCheck(Rng& rng)
+{
+    int failures = 0;
+    auto check = [&](bool ok, const char* what) {
+        printf("  %s: %s\n", ok ? "ok" : "FAILED", what);
+        if (!ok)
+            failures++;
+    };
+    const Matrix4 projection = Projection(0.8179, 1.6496, -0.00003, 0.11667);
+    IDirect3DSurface9* const kMain = (IDirect3DSurface9*)0x3000;
+    IDirect3DSurface9* const kReflection = (IDirect3DSurface9*)0x3100;
+    IDirect3DSurface9* const kHalf = (IDirect3DSurface9*)0x3200;
+    auto setTarget = [&](IDirect3DSurface9* surface, UINT width, UINT height) {
+        g_renderTarget0 = surface;
+        g_rtWidth = width;
+        g_rtHeight = height;
+        g_hasDepthBuffer = true;
+    };
+    auto publish = [&](const TestCamera& c, unsigned long long frame) {
+        MainCameraPose pose = {};
+        for (int i = 0; i < 3; i++) {
+            pose.pos[i] = c.pos[i];
+            pose.right[i] = c.right[i];
+            pose.up[i] = c.up[i];
+            pose.fwd[i] = c.fwd[i];
+        }
+        pose.projX = 0.8179;
+        pose.projY = 1.6496;
+        pose.frame = frame;
+        PublishMainCameraPose(pose);
+    };
+    // a draw of the main pass through `camera` (what ClassifyDraw does for a draw with a recoverable view-projection)
+    auto draw = [&](const TestCamera& camera, IDirect3DSurface9* target, unsigned long long frame) {
+        float registers[16];
+        StoreMatrix(Multiply(ViewOf(camera), projection), kLayout, registers);
+        setTarget(target, 2160, 1071);
+        g_vr.frameCount = frame;
+        if (TryRecoverProjection(registers))
+            NoteMainSizedCamera(registers);
+    };
+    const TestCamera head = MakeCamera(0.5, 0.07, 120.0, 0.9, 40.0);
+    const TestCamera mirror = MirrorOf(head, 1.8, false);
+    printf("finding the mirrored camera:\n");
+    ResetMainSizedReflectionTarget();
+    publish(head, 100);
+    draw(head, kMain, 100);
+    check(!IsMainSizedReflectionTarget(), "the main camera's own draws do not mark their target");
+    draw(mirror, kReflection, 100);
+    check(IsMainSizedReflectionTarget() && MainSizedReflectionAxis() == 1 && IsReflectionPass(), "the draws of the camera 1.8 m under it with the up axis turned round mark theirs (axis Y)");
+    setTarget(kMain, 2160, 1071);
+    check(!IsMainSizedReflectionTarget() && MainSizedReflectionAxis() < 0 && !IsReflectionPass(), "the main target is still the main pass");
+    setTarget(kHalf, 1080, 535);
+    check(IsReflectionPass() && MainSizedReflectionAxis() < 0, "the half-size pass is the reflection pass by its size, as before");
+    publish(head, 101);
+    draw(head, kReflection, 101);
+    check(!IsMainSizedReflectionTarget(), "a main-camera draw into that target takes the mark off again");
+    publish(head, 102);
+    draw(mirror, kReflection, 102);
+    check(IsMainSizedReflectionTarget(), "and the mirrored camera puts it back");
+    ResetMainSizedReflectionTarget();
+    check(!IsMainSizedReflectionTarget(), "a Reset forgets the surface");
+    publish(head, 103);
+    draw(MirrorOf(head, 0.1, false), kReflection, 103);
+    check(!IsMainSizedReflectionTarget(), "a mirror only 0.1 m under the main camera is not taken for the reflection");
+    publish(head, 104);
+    draw(MirrorOf(head, 1.8, true), kReflection, 104);
+    check(!IsMainSizedReflectionTarget(), "a camera under it with all three axes turned round (the rear-view camera) is refused");
+    publish(head, 50);
+    draw(mirror, kReflection, 105);
+    check(!IsMainSizedReflectionTarget(), "a main camera pose that is more than three frames old is not trusted");
+    publish(head, 106);
+    draw(mirror, kReflection, 106);
+    check(IsMainSizedReflectionTarget(), "a fresh one is");
+    ResetMainSizedReflectionTarget();
+    {
+        TestCamera aside = mirror; // (the camera position is recovered from the view-projection: this one is not under the main camera)
+        aside.pos[0] += 40;
+        publish(head, 107);
+        draw(aside, kReflection, 107);
+        check(!IsMainSizedReflectionTarget(), "a mirrored camera 40 m to the side is refused");
+    }
+
+    printf("drawing it like the half-size pass:\n");
+    ResetMainSizedReflectionTarget();
+    publish(head, 200);
+    draw(mirror, kReflection, 200); // marks the target
+    // the same draw (a scene draw through the mirrored camera) in three situations; ApplyEyeConstants must write the same constants in the first two
+    const VertexShaderInfo* sceneShaders[2] = {g_vsPool[K_SCENE][0], g_vsPool[K_SCENE][1]};
+    int differentFromHalf = 0, identical = 0;
+    for (int trial = 0; trial < 40; trial++) {
+        SetEyes(rng);
+        Matrix4 world = Rigid(rng, 3.0, 40.0);
+        Matrix4 view = ViewOf(mirror);
+        const Matrix4 viewProj = Multiply(view, projection);
+        float registers[8 * 4];
+        StoreMatrix(Multiply(world, viewProj), kLayout, &registers[0]);
+        StoreMatrix(Multiply(world, view), kLayout, &registers[16]);
+        std::vector<float> results[3];
+        for (int situation = 0; situation < 3; situation++) {
+            FlushDeviceState();
+            switch (situation) {
+                case 0: setTarget(kHalf, 1080, 535); g_cfg.reflectionFlipMode = 2; break; // the race's pass, told the axis
+                case 1: setTarget(kReflection, 2160, 1071); g_cfg.reflectionFlipMode = -1; break; // the marked target, the axis from its draws
+                case 2: setTarget(kMain, 2160, 1071); g_cfg.reflectionFlipMode = -1; break;       // a main-sized target that is not marked
+            }
+            g_currentVsInfo = (VertexShaderInfo*)sceneShaders[trial & 1];
+            GameSetVs(0, 8, registers);
+            for (int eye = 0; eye < 2; eye++) {
+                ApplyEyeConstants((IDirect3DDevice9*)&g_fakeDevice, eye);
+                results[situation].insert(results[situation].end(), g_devVs, g_devVs + 8 * 4);
+                FlushDeviceState();
+                GameSetVs(0, 8, registers);
+            }
+        }
+        if (results[0] == results[1])
+            identical++;
+        if (results[0] != results[2])
+            differentFromHalf++;
+    }
+    g_cfg.reflectionFlipMode = -1;
+    check(identical == 40, "a marked main-sized target gets the constants of the half-size pass (40 of 40 draws)");
+    check(differentFromHalf == 40, "an unmarked one does not (it is drawn through the head's own delta: 40 of 40 differ)");
+
+    printf("a draw into that target, in the showroom and in a race (once for each eye, with the eyes' own constants):\n");
+    {
+        const int savedMode = g_modeOverride;
+        const bool savedSeen = g_levelFilesSeen;
+        char savedLevel[64];
+        strcpy(savedLevel, g_currentLevel);
+        unsigned showroomTwice = 0, showroomRewritten = 0, raceTwice = 0, raceRewritten = 0;
+        for (int trial = 0; trial < 20; trial++) {
+            SetEyes(rng);
+            Matrix4 world = Rigid(rng, 3.0, 40.0);
+            Matrix4 view = ViewOf(mirror);
+            float registers[8 * 4];
+            StoreMatrix(Multiply(world, Multiply(view, projection)), kLayout, &registers[0]);
+            StoreMatrix(Multiply(world, view), kLayout, &registers[16]);
+            for (int where = 0; where < 2; where++) {
+                if (where == 0) { // the showroom, as the game's file opens tell it
+                    g_modeOverride = 0;
+                    g_levelFilesSeen = true;
+                    strcpy(g_currentLevel, "showroom");
+                } else {
+                    g_modeOverride = 2;
+                    strcpy(g_currentLevel, "track");
+                }
+                FlushDeviceState();
+                const unsigned long long frame = 400 + 2 * trial + where;
+                publish(head, frame);
+                ResetMainSizedReflectionTarget();
+                draw(mirror, kReflection, frame); // (a draw with a view-projection comes first in a frame: it marks the target)
+                setTarget(kReflection, 2160, 1071);
+                g_currentVsInfo = (VertexShaderInfo*)sceneShaders[trial & 1];
+                g_currentPsInfo = g_psPool[K_SCENE][0];
+                g_vr.frameCount = frame;
+                GameSetVs(0, 8, registers);
+                std::vector<float> seen;
+                const unsigned long long before = g_drawCalls;
+                RunDraw((IDirect3DDevice9*)&g_fakeDevice, DrawCall([&]() {
+                            g_drawCalls++;
+                            seen.insert(seen.end(), g_devVs, g_devVs + 8 * 4);
+                            return D3D_OK;
+                        }));
+                const unsigned long long draws = g_drawCalls - before;
+                const bool game = seen.size() >= 32 && memcmp(seen.data(), registers, sizeof(registers)) == 0;
+                const bool rewritten = draws == 2 && !game && seen.size() == 64 && memcmp(seen.data(), seen.data() + 32, 32 * sizeof(float)) != 0;
+                if (where == 0) {
+                    showroomTwice += draws == 2;
+                    showroomRewritten += rewritten;
+                } else {
+                    raceTwice += draws == 2;
+                    raceRewritten += rewritten;
+                }
+            }
+        }
+        g_modeOverride = savedMode;
+        g_levelFilesSeen = savedSeen;
+        strcpy(g_currentLevel, savedLevel);
+        printf("  (showroom: twice %u, rewritten %u; race: twice %u, rewritten %u)\n", showroomTwice, showroomRewritten, raceTwice, raceRewritten);
+        check(showroomTwice == 20 && showroomRewritten == 20, "in the showroom it is drawn for each eye, with the eyes' own constants (20 of 20 draws)");
+        check(raceTwice == 20 && raceRewritten == 20, "in a race it is drawn for each eye, with the eyes' own constants (20 of 20 draws)");
+    }
+
+    printf("the game's clip plane for the pass, carried to each eye:\n");
+    {
+        // The game clips the reflection scene with a plane in the clip space of its mirrored camera (the engine carries the world plane there with
+        // the inverse of the view-projection).  The vertex shaders get the eye's view-projection, so the plane must follow: for every point the
+        // eye's plane and clip coordinates must give the number the game's plane gives with the game's clip coordinates (= the world plane at the point).
+        const int savedMode = g_modeOverride;
+        const bool savedSeen = g_levelFilesSeen;
+        char savedLevel[64];
+        strcpy(savedLevel, g_currentLevel);
+        unsigned draws = 0, same = 0, moved = 0, restored = 0, trials = 0, quiet = 0, quietTrials = 0;
+        double worstError = 0;
+        auto row = [](const double v[4], const Matrix4& m, double out[4]) {
+            for (int j = 0; j < 4; j++) {
+                out[j] = 0;
+                for (int i = 0; i < 4; i++)
+                    out[j] += v[i] * m.m[i][j];
+            }
+        };
+        for (int trial = 0; trial < 20; trial++) {
+            SetEyes(rng);
+            const Matrix4 world = Rigid(rng, 3.0, 40.0);
+            const Matrix4 view = ViewOf(mirror);
+            const Matrix4 viewProj = Multiply(view, projection);
+            float registers[8 * 4];
+            StoreMatrix(Multiply(world, viewProj), kLayout, &registers[0]);
+            StoreMatrix(Multiply(world, view), kLayout, &registers[16]);
+            // a world plane (nearly the floor, at a random height) and the game's clip plane for it: (view-projection)^-1 * plane
+            double worldPlane[4] = {rng.Uniform(-0.1, 0.1), 1.0, rng.Uniform(-0.1, 0.1), rng.Uniform(-3.0, 3.0)};
+            Matrix4 viewProjInverse;
+            Invert(viewProj, viewProjInverse);
+            float gamePlane[4];
+            for (int i = 0; i < 4; i++) {
+                double s = 0;
+                for (int k = 0; k < 4; k++)
+                    s += viewProjInverse.m[i][k] * worldPlane[k];
+                gamePlane[i] = (float)s;
+            }
+            for (int where = 0; where < 2; where++) {
+                if (where == 0) { // the showroom
+                    g_modeOverride = 0;
+                    g_levelFilesSeen = true;
+                    strcpy(g_currentLevel, "showroom");
+                } else {
+                    g_modeOverride = 2;
+                    strcpy(g_currentLevel, "track");
+                }
+                FlushDeviceState();
+                const unsigned long long frame = 600 + 2 * trial + where;
+                publish(head, frame);
+                ResetMainSizedReflectionTarget();
+                draw(mirror, kReflection, frame);
+                setTarget(kReflection, 2160, 1071);
+                g_currentVsInfo = (VertexShaderInfo*)sceneShaders[trial & 1];
+                g_currentPsInfo = g_psPool[K_SCENE][0];
+                g_vr.frameCount = frame;
+                GameSetVs(0, 8, registers);
+                for (int pass = 0; pass < 2; pass++) { // 0: the game has clip plane 0 on (the reflection scene), 1: it has not (anything else)
+                    DeviceNoteGameClipPlane(gamePlane);
+                    DeviceNoteGameClipPlaneEnable(pass == 0 ? 1 : 0);
+                    memcpy(g_devClipPlane, gamePlane, sizeof(gamePlane)); // (the game's own call went through to the device)
+                    g_clipPlaneCalls = 0;
+                    std::vector<float> seen;
+                    std::vector<float> planes;
+                    RunDraw((IDirect3DDevice9*)&g_fakeDevice, DrawCall([&]() {
+                                seen.insert(seen.end(), g_devVs, g_devVs + 16);
+                                planes.insert(planes.end(), g_devClipPlane, g_devClipPlane + 4);
+                                return D3D_OK;
+                            }));
+                    if (pass == 1) {
+                        quietTrials++;
+                        quiet += g_clipPlaneCalls == 0 && memcmp(g_devClipPlane, gamePlane, sizeof(gamePlane)) == 0;
+                        continue;
+                    }
+                    trials++;
+                    for (size_t d = 0; d < planes.size() / 4; d++) {
+                        Matrix4 eyeViewProjWorld;
+                        LoadMatrix(&seen[d * 16], kLayout, eyeViewProjWorld);
+                        bool ok = true;
+                        for (int sample = 0; sample < 6; sample++) {
+                            const double q[4] = {rng.Uniform(-5, 5), rng.Uniform(-5, 5), rng.Uniform(-5, 5), 1.0};
+                            double clip[4], where4[4];
+                            row(q, eyeViewProjWorld, clip);
+                            row(q, world, where4);
+                            double lhs = 0, rhs = 0, scale = 1;
+                            for (int j = 0; j < 4; j++) {
+                                lhs += (double)planes[d * 4 + j] * clip[j];
+                                rhs += worldPlane[j] * where4[j];
+                                scale += fabs((double)planes[d * 4 + j] * clip[j]);
+                            }
+                            const double error = fabs(lhs - rhs) / scale;
+                            worstError = std::max(worstError, error);
+                            ok = ok && error < 2e-3;
+                        }
+                        draws++;
+                        same += ok;
+                        moved += memcmp(&planes[d * 4], gamePlane, sizeof(gamePlane)) != 0;
+                    }
+                    FlushDeviceState();
+                    restored += memcmp(g_devClipPlane, gamePlane, sizeof(gamePlane)) == 0;
+                }
+            }
+        }
+        g_modeOverride = savedMode;
+        g_levelFilesSeen = savedSeen;
+        strcpy(g_currentLevel, savedLevel);
+        DeviceNoteGameClipPlaneEnable(0);
+        printf("  (%u passes, %u draws: %u with the plane on the same points, %u with the plane moved, worst error %.2g; %u of %u passes left the device the game's plane; %u of %u passes without a game plane untouched)\n",
+               trials, draws, same, moved, worstError, restored, trials, quiet, quietTrials);
+        check(draws == 2 * trials && same == draws, "every draw gets a plane that keeps exactly the points the game's plane keeps (80 of 80 draws, two eyes each)");
+        check(moved == draws, "and it is not the game's own numbers (the plane has moved with the eye)");
+        check(restored == trials, "the game's plane is back on the device when the per-eye draws are over");
+        check(quiet == quietTrials && quietTrials > 0, "with the game's clip plane off, the mod does not touch the device's plane");
+    }
+    printf(failures ? "mirror: %d FAILURE(S)\n" : "mirror: all checks passed\n", failures);
+    return failures ? 1 : 0;
+}
+
 int main(int argc, char** argv)
 {
     QueryPerformanceFrequency(&g_counterFrequency);
@@ -618,6 +982,8 @@ int main(int argc, char** argv)
         printf("queries: %llu (not compared)\n", g_queries);
         return 0;
     }
+    if (mode == "mirror")
+        return MirrorCheck(rng);
     if (mode == "micro") { // cost of the building blocks, to see what is worth caching
         LARGE_INTEGER f, t0, t1;
         QueryPerformanceFrequency(&f);

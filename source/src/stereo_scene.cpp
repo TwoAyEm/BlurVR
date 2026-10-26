@@ -2,6 +2,7 @@
 #include "stereo_scene.h"
 #include "camera.h"
 #include "config.h"
+#include "core.h"
 #include "d3d_hooks.h"
 #include "device_state.h"
 #include "game_camera.h"
@@ -57,6 +58,8 @@ struct EyeRewrite {
     RewriteKey key;
     Matrix4 newProj;   // the eye's projection
     Matrix4 clipRemap; // inverse(game's projection) * delta * newProj
+    Matrix4 clipRemapInverse; // (what the game's clip plane is carried to the eye's clip space with)
+    bool clipInvertible;
 };
 static EyeRewrite g_rewrites[3][4]; // by eye (2 = centre) and reflection flip mode
 
@@ -125,6 +128,7 @@ static const EyeRewrite& GetRewrite(int eye, int flipSlot, const EyeBox& box, co
         MakeKey(rewrite.key, box, delta);
         rewrite.newProj = BuildEyeProjection(box, eye);
         rewrite.clipRemap = Multiply(Multiply(gameProjectionInverse, delta), rewrite.newProj);
+        rewrite.clipInvertible = Invert(rewrite.clipRemap, rewrite.clipRemapInverse);
         rewrite.valid = true;
     }
     return rewrite;
@@ -193,8 +197,9 @@ void ApplyEyeConstants(IDirect3DDevice9* device, int eye)
     Matrix4 flippedDelta;
     int flipSlot = 0;
     g_eyeWorldOffsetValid = false;
-    g_eyeMainCamera = !(IsHalfResPass() && IsReflectionSizedPass());
-    if (IsHalfResPass() && IsReflectionSizedPass() && g_matrixLayout) {
+    const bool reflectionPass = IsReflectionPass();
+    g_eyeMainCamera = !reflectionPass;
+    if (reflectionPass && g_matrixLayout) {
         int flipMode = g_cfg.reflectionFlipMode;
         double viewDeterminant = 1;
         for (const TrackedConstant& tracked : g_currentVsInfo->tracked) {
@@ -214,6 +219,8 @@ void ApplyEyeConstants(IDirect3DDevice9* device, int eye)
         }
         if (flipMode < 0) {
             int axis = ReflectionFlipAxis(); // the axis the game's own reflection camera has turned round, seen by the hooks of game_camera.cpp
+            if (axis < 0)
+                axis = MainSizedReflectionAxis(); // (or by the draws themselves, for a reflection drawn into a target as big as the picture)
             flipMode = axis >= 0 ? axis + 1 : ((viewDeterminant > 0) ? 1 : 0);
         }
         // The reflection is drawn as if the head looked straight ahead (only its yaw kept, the eyes where they are): the game lays a fixed band of ground haze below the horizon of its
@@ -423,6 +430,29 @@ void ApplyEyeConstants(IDirect3DDevice9* device, int eye)
         }
     }
     DeviceSetVsOverrides(device, writes, writeCount);
+    // The game clips its reflection passes with a plane (SetClipPlane, plane 0: the mirror plane, so that nothing under it is drawn
+    // into the reflection).  It is given in the clip space of the camera the pass is drawn through, which here is the game's own while
+    // the vertex shaders now put the eye's view-projection there (the game's times clipRemap).  Left alone the plane stays where it
+    // was for the game's camera, i.e. it moves through the world with the head, and cuts off the lower part of whatever is reflected
+    // (the car in the showroom), higher or lower as the head is.  A point's clip coordinates for the eye are the game's times
+    // clipRemap, so a plane `p` on the game's coordinates is clipRemap^-1 * p on the eye's: the same set of points of the world.
+    if (g_matrixLayout && DeviceGameClipPlaneActive() && rewrite.clipInvertible) {
+        const float* game = DeviceGameClipPlane();
+        float plane[4];
+        for (int i = 0; i < 4; i++) {
+            double s = 0;
+            for (int k = 0; k < 4; k++)
+                s += rewrite.clipRemapInverse.m[i][k] * game[k];
+            plane[i] = (float)s;
+        }
+        DeviceSetEyeClipPlane(device, plane);
+        static int logs = 0;
+        if (logs < 6) {
+            logs++;
+            Log("reflection clip plane: the game's (%.3f %.3f %.3f %.3f) is (%.3f %.3f %.3f %.3f) for eye %d (target %ux%u)", game[0], game[1], game[2], game[3], plane[0], plane[1], plane[2], plane[3], eye,
+                g_rtWidth, g_rtHeight);
+        }
+    }
 }
 
 void RestoreEyeConstants(IDirect3DDevice9* device)

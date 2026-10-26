@@ -109,6 +109,7 @@ static HRESULT STDMETHODCALLTYPE H_Reset(IDirect3DDevice9* d, D3DPRESENT_PARAMET
     ReleaseDesktopMessage();
     ReleaseFpsCounter();
     g_renderTargetTextures.clear();
+    ResetMainSizedReflectionTarget();
     AdjustPresentParams(pp, true);
     if (pp)
         WindowSpoofWindowed(pp->Windowed != 0);
@@ -271,8 +272,16 @@ static HRESULT STDMETHODCALLTYPE H_SetRenderState(IDirect3DDevice9* d, D3DRENDER
     if (st == D3DRS_SCISSORTESTENABLE) {
         g_gameScissorEnabled = v ? TRUE : FALSE;
         DeviceNoteGameScissorEnable(v != 0);
-    }
+    } else if (st == D3DRS_CLIPPLANEENABLE)
+        DeviceNoteGameClipPlaneEnable(v);
     return ORIG(PFN_SetRenderState, VT_SetRenderState)(d, st, v);
+}
+static HRESULT STDMETHODCALLTYPE H_SetClipPlane(IDirect3DDevice9* d, DWORD index, const float* plane)
+{
+    HRESULT hr = ORIG(PFN_SetClipPlane, VT_SetClipPlane)(d, index, plane);
+    if (SUCCEEDED(hr) && index == 0 && plane)
+        DeviceNoteGameClipPlane(plane);
+    return hr;
 }
 static HRESULT STDMETHODCALLTYPE H_SetScissorRect(IDirect3DDevice9* d, const RECT* r)
 {
@@ -472,6 +481,7 @@ void HookDevice(IDirect3DDevice9* dev)
     HK(VT_SetViewport, H_SetViewport);
     HK(VT_SetTexture, H_SetTexture);
     HK(VT_SetRenderState, H_SetRenderState);
+    HK(VT_SetClipPlane, H_SetClipPlane);
     HK(VT_SetScissorRect, H_SetScissorRect);
     HK(VT_CreateVertexShader, H_CreateVertexShader);
     HK(VT_SetVertexShader, H_SetVertexShader);

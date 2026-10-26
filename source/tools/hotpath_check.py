@@ -5,7 +5,8 @@
     python tools/hotpath_check.py --src src --compare other_src     # also build other_src and compare the check hashes
 
 Needs Python with `pip install ziglang`.  Prints the hash of everything the mod sent to the fake device over a number of
-synthetic frames (equal hashes = identical rendering commands) and the nanoseconds per draw for each kind of draw.
+synthetic frames (equal hashes = identical rendering commands) and the nanoseconds per draw for each kind of draw.  It also runs the `mirror` mode of
+the check (the showroom's reflection, drawn into a target as big as the picture, is found and drawn like the race's half-size reflection pass).
 """
 import os
 import sys
@@ -76,6 +77,9 @@ def main():
                         args.src, [l for l in check.splitlines() if l.startswith('calls')][0],
                         args.compare, [l for l in other_check.splitlines() if l.startswith('calls')][0]))
             print(line)
+        mirror = subprocess.run([exe, 'mirror'], capture_output=True, text=True)
+        print('reflection in a target as big as the picture:\n' + mirror.stdout.rstrip() + mirror.stderr.rstrip())
+        status |= 1 if mirror.returncode else 0
         if other:
             print('IDENTICAL in every variant: the builds sent the same state to the device at every draw.' if not status else
                   'DIFFERENT: the builds do not render identically.')
