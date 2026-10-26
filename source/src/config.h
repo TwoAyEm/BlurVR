@@ -62,9 +62,7 @@ struct Config {
     int perfEnabled = 0;  // [Perf] Enabled: log GPU and CPU frame timing once a second (perf_probe.cpp); the key below flips it live
     int keyPerf = 0x67;   // numpad 7
     int keyDump = 0x68;   // [Debug] KeyDump, numpad 8: save the picture sent to the headset and the UI layers as .bmp files (frame_dump.cpp)
-    int skipReflections = 0; // [VR] Reflections=0 sets it: the game's planar reflection pass (the water of a race) is left out, in races only (draw_dispatch.cpp: ApplyReflectionSwitch); numpad 5 flips it live, logged
-    int skipShadows = 0;     // test switch (not in the ini; numpad 4 flips it live, logged): 1 = the shadow maps are not drawn, to see what they cost in frame time (draw_dispatch.cpp: TestSkipDraw)
-    int keyReflections = 0x65, keyShadows = 0x64; // [Debug] KeyReflections, numpad 5; numpad 4 (the shadow test)
+    int skipReflections = 0; // [VR] Reflections=0 sets it: the game's planar reflection pass (the water of a race) is left out, in races only (draw_dispatch.cpp: ApplyReflectionSwitch)
     int fpsCounter = 0;   // [VR] FpsCounter: 1 = a small panel in the headset shows the frames a second the game presents (fps_counter.cpp); the key below flips it live
     int keyFps = 0x69;    // [Debug] KeyFps, numpad 9
     int sharedTransport = 1; // [VR] SharedTransport (VR only, on by default; falls back to the CPU copy by itself if it cannot work): 1 = run the game on a Direct3D 9Ex device and hand the finished frame to SteamVR as a shared texture (no read back through the CPU)

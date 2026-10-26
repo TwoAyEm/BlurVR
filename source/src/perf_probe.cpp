@@ -370,8 +370,7 @@ static void WriteSummary()
             sectionSum += sectionMs[s];
         }
         double modPerDrawUs = g_agg.cpu.hookCalls ? (g_agg.cpu.hook - g_agg.cpu.driver) * toMs * 1000.0 / g_agg.cpu.hookCalls : 0;
-        const char* test = g_cfg.skipShadows ? (g_cfg.skipReflections ? " [reflections and (test) shadows left out]" : " [(test) shadows left out]")
-                                             : (g_cfg.skipReflections ? " [reflections left out]" : ""); // (draw_dispatch.cpp: ApplyReflectionSwitch, TestSkipDraw)
+        const char* test = g_cfg.skipReflections ? " [reflections left out]" : ""; // (draw_dispatch.cpp: ApplyReflectionSwitch)
         snprintf(line, sizeof(line),
                  "perf%s: %.1f fps, frame %.2f ms | cpu per frame (ms): draw hooks %.2f (driver %.2f, mod %.2f = %.2f us/draw), "
                  "hud compose %.2f, readback %.2f, upload %.2f, submit %.2f, present+limiter %.2f, pose wait %.2f, "

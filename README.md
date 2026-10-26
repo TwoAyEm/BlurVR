@@ -73,7 +73,6 @@ In VR the size is kept in `BlurVR.ini` (`[VR] Resolution=WxH`): the game starts 
 | **F9** | Recenter (sit comfortably, look straight ahead, press F9). This is SteamVR's own recentre, so recentering in SteamVR does the same. BlurVR also recenters at the start of every race (set `AutoRecenter=0` in `BlurVR.ini` to turn that off). |
 | **F10** | Head tracking on/off (stereo image stays, camera stops following your head) |
 | **F8** | Mode override: AUTO → FORCE MENU → FORCE RACE. Use it if the mod picks the wrong mode. Flat (`Stereo=0`) it does the same job for the menu key repeat limit: AUTO → forced on → forced off. |
-| **Num5** | The game's reflection pass in races on/off (same as `Reflections` in the ini) |
 | **Num6** | 3D rear-view mirror on/off (same as `Mirror3D` in the ini) |
 | **Num7** | Timing probe on/off (see [Troubleshooting](#troubleshooting)) |
 | **Num8** | Save what the headset sees as picture files (see [Troubleshooting](#troubleshooting)) |
@@ -149,7 +148,7 @@ Blur counts how long a key is held in frames and, after a second, repeats it eve
 | `Bloom` | `100` | Strength of the game's glow around its menus, UI and loading screens, in percent (0 = none, 200 = double) |
 | `NoLensFlare` | `0` | 1 = drop the flare sprites and the glow around lights |
 | `MotionBlur` | `1` | 0 = no motion blur. The game's blur pass then writes the picture without blur (one texture read a pixel instead of the blur's many), which takes a little load off the GPU; it made no difference to the frame rate in a test with a Valve Index. 1 = the game's own motion blur, drawn for each eye. |
-| `Reflections` | `1` | 0 = leave the game's reflection pass (the water's reflection) out in races. BlurVR turns off the game's own switch for it (a tweakable the game tests before it culls or draws anything for the pass), so the game does none of that work for it: in a test on the LA River at 3584x2016 that took 0.7 ms off a frame of 13 ms (about 76 to 81 frames a second). The menu showroom keeps its floor's reflection. If the game's switch is not found in your build, the pass's draw calls are left out instead, which saves less. 1 = the game's own reflections. **Num5** switches it in game. |
+| `Reflections` | `1` | 0 = leave the game's reflection pass (the water's reflection) out in races. BlurVR turns off the game's own switch for it (a tweakable the game tests before it culls or draws anything for the pass), so the game does none of that work for it: in a test on the LA River at 3584x2016 that took 0.7 ms off a frame of 13 ms (about 76 to 81 frames a second). The menu showroom keeps its floor's reflection. If the game's switch is not found in your build, the pass's draw calls are left out instead, which saves less. 1 = the game's own reflections. |
 | `SharedTransport` | `1` | Run the game on a Direct3D 9Ex device and hand each finished race frame to SteamVR on the GPU instead of copying it through the CPU (saves several ms a frame, most at large sizes). On by default; it falls back to the CPU copy by itself when it cannot work. Set 0 if textures look wrong or the picture is black |
 | `DesktopView` | `off` | What the window on the desktop shows: `off` = no picture of the game at all: the window says "Playing in VR" with the game's logo (also in the menus and while loading) and is painted twice a second, which saves the GPU the copy of the game's picture. `left` = the left eye's view in a race (cropped to the window's shape and drawn at the window's own size, which is cheap), `right` = the right eye's, `both` = the whole side-by-side picture. The headset's picture is not affected. `off` needs a windowed game without multisampling (otherwise the window shows the left eye's view). Before 1.5 the default was `left`. |
 | `DesktopPresentEvery` | `1` | In a race, the window on the desktop (a mirror of the headset) really updates only every n-th frame (2-4 saves a little GPU time; 1 = every frame) |
@@ -199,7 +198,6 @@ The floating screen in menus.
 
 | Key | Default | What it does |
 |---|---|---|
-| `KeyReflections` | `0x65` (Num5) | Key for the reflections switch |
 | `KeyMirror3D` | `0x66` (Num6) | Key for the 3D mirror switch |
 | `KeyPerf` | `0x67` (Num7) | Key for the timing probe switch |
 | `KeyDump` | `0x68` (Num8) | Key for saving the headset picture as files |
@@ -283,7 +281,7 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 
 **Frame rate**
 
-- **New: `Reflections=0` (under `[VR]`) leaves the water's reflection out of races.** The game has a switch of its own for its reflection pass; BlurVR turns it off in races, so the game neither culls nor draws the pass, and the mod does not have to draw it twice. In a test on the LA River at 3584x2016 that saved 0.7 ms of a frame of 13 ms (about 5 frames a second). **Num5** switches it in game; the menu showroom keeps its floor's reflection. `1` (the default) is the game's reflections as before. With `Log=1`, `BlurVR.log` has a `reflections:` line saying whether the game's switch was found.
+- **New: `Reflections=0` (under `[VR]`) leaves the water's reflection out of races.** The game has a switch of its own for its reflection pass; BlurVR turns it off in races, so the game neither culls nor draws the pass, and the mod does not have to draw it twice. In a test on the LA River at 3584x2016 that saved 0.7 ms of a frame of 13 ms (about 5 frames a second). The menu showroom keeps its floor's reflection. `1` (the default) is the game's reflections as before. With `Log=1`, `BlurVR.log` has a `reflections:` line saying whether the game's switch was found.
 
 **Other**
 

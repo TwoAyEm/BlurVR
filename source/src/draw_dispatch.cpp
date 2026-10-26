@@ -98,17 +98,8 @@ static bool CoverageOfCandidate(IDirect3DDevice9* device, const D3DVIEWPORT9& ba
     return entry.got && entry.frac >= minFrac;
 }
 
-// The planar reflection pass ([VR] Reflections=0, numpad 5 in game) and, as a test, the shadow maps (numpad 4) are left out in races.  The reflection pass is left out at the
-// game's own switch where that is found (ApplyReflectionSwitch), else at the draw call; a shadow map is taken for a draw into a square render target of 256 or more that is not
-// the back buffer.  What was left out at the draw call is counted by render target and logged every few seconds, so a run shows what was caught.
-struct SkipCount {
-    int kind; // 0 shadow map, 1 reflection pass
-    UINT width, height;
-    unsigned count;
-};
-static SkipCount g_skipCounts[8];
-static int g_skipCountUsed = 0;
-static unsigned long long g_skipReported = 0;
+// The planar reflection pass is left out in races ([VR] Reflections=0): at the game's own switch where that is found (ApplyReflectionSwitch), else at the draw call
+// (SkipReflectionDraw).
 // The game's own switch for its planar reflection pass is a tweakable (Amax.Views.ReflectionEnable, a byte).  The reflection function (0x4297F0 in the Steam build) starts with
 // `sub esp,0x208 / cmp byte [flag],0 / push ebx / push ebp / push esi / push edi / mov ebp,ecx / je ...` and returns at once when the byte is 0, so before any culling, state
 // setting or drawing: with it the pass is left out at the source and the game's own work for it goes too, which leaving out the draw calls does not (the game still prepares each
@@ -186,34 +177,15 @@ void ApplyReflectionSwitch()
             Log("reflections: the game's reflection pass is %s at the source (the byte is now %u)", off ? "OFF" : "back on", (unsigned)wanted);
     }
 }
-static bool TestSkipDraw(int plan)
+// The game's switch was not found (another build of the game): the pass's draw calls are left out instead, which saves much less (the game still prepares each draw).
+static bool SkipReflectionDraw(int plan)
 {
-    int kind = -1;
-    if (!g_reflectionFlag && plan == 1 && IsReflectionPass() && ReflectionsLeftOut()) // (no game switch found: the draws are left out)
-        kind = 1;
-    else if (g_cfg.skipShadows && plan == 0 && g_vr.active && g_rtWidth >= 256 && g_rtWidth == g_rtHeight && g_renderTarget0 != g_backBufferSurface && IsRaceMode())
-        kind = 0;
-    if (kind < 0)
+    if (!g_reflectionFlagSearched || g_reflectionFlag || plan != 1 || !IsReflectionPass() || !ReflectionsLeftOut())
         return false;
-    int slot = -1;
-    for (int i = 0; i < g_skipCountUsed; i++)
-        if (g_skipCounts[i].kind == kind && g_skipCounts[i].width == g_rtWidth && g_skipCounts[i].height == g_rtHeight)
-            slot = i;
-    if (slot < 0 && g_skipCountUsed < 8) {
-        slot = g_skipCountUsed++;
-        g_skipCounts[slot] = {kind, g_rtWidth, g_rtHeight, 0};
-    }
-    if (slot >= 0)
-        g_skipCounts[slot].count++;
-    const unsigned long long now = GetTickCount64();
-    if (!g_skipReported)
-        g_skipReported = now;
-    else if (now - g_skipReported >= 3000) {
-        for (int i = 0; i < g_skipCountUsed; i++)
-            Log("left out: %s: %u draws into %ux%u in the last %.0f s", g_skipCounts[i].kind ? "reflection pass" : "shadow map", g_skipCounts[i].count, g_skipCounts[i].width,
-                g_skipCounts[i].height, (double)(now - g_skipReported) / 1000.0);
-        g_skipCountUsed = 0;
-        g_skipReported = now;
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        Log("reflections: the pass's draw calls are left out (the game's own switch was not found)");
     }
     return true;
 }
@@ -525,7 +497,7 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
         }
     }
     int plan = ClassifyDraw(device);
-    if ((g_cfg.skipShadows || g_cfg.skipReflections) && TestSkipDraw(plan))
+    if (g_cfg.skipReflections && SkipReflectionDraw(plan))
         return D3D_OK;
     perf.Classified(plan);
     if (plan != 1)

@@ -697,20 +697,6 @@ static void PollSwitchKeys()
         Log("switch: FPS counter = %d", g_cfg.fpsCounter);
     }
     fpsWasDown = fpsDown;
-    // numpad 5: the planar reflection pass in races on/off (same as [VR] Reflections); numpad 4: a test switch that leaves the shadow maps out (draw_dispatch.cpp: TestSkipDraw)
-    static bool shadowsWasDown = false, reflectionsWasDown = false;
-    bool shadowsDown = g_cfg.keyShadows && (GetAsyncKeyState(g_cfg.keyShadows) & 0x8000) != 0;
-    if (shadowsDown && !shadowsWasDown) {
-        g_cfg.skipShadows = g_cfg.skipShadows ? 0 : 1;
-        Log("switch: shadow maps %s", g_cfg.skipShadows ? "LEFT OUT (test)" : "drawn");
-    }
-    shadowsWasDown = shadowsDown;
-    bool reflectionsDown = g_cfg.keyReflections && (GetAsyncKeyState(g_cfg.keyReflections) & 0x8000) != 0;
-    if (reflectionsDown && !reflectionsWasDown) {
-        g_cfg.skipReflections = g_cfg.skipReflections ? 0 : 1;
-        Log("switch: planar reflections in races %s", g_cfg.skipReflections ? "LEFT OUT" : "drawn");
-    }
-    reflectionsWasDown = reflectionsDown;
 }
 
 bool VrShowEyeOnDesktop(IDirect3DDevice9* device, RECT* presented)
