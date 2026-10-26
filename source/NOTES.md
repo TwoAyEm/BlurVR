@@ -131,38 +131,64 @@ screen centre, UV range and frustum corners are those of the whole image, not of
 the pass once per eye (scissor = eye half) with constants rewritten for that eye. All use the original constant
 setters and restore afterwards.
 
-**Motion blur** (`MotionBlurPerEye`). PS has `g_mMatrix` in UV space (rows u, v, depth, 1; columns x, y, w used), so
-its radial centre landed on the seam. Per eye: `M_e = T * M * S` with
-`T = [[a1,0,0,0],[0,a2,0,0],[0,0,1,0],[b1,b2,0,1]]`, `S = inv(T)`-like (`[1/a1,...,-b1/a1,-b2/a2]`),
-`a1 = A*(r-l)`, `b1 = 0.5 + 0.5*A*(l - 2*off*(r-l))`, `a2 = 0.5*B*(up+dn)`, `b2 = 0.5 - 0.5*B*up`,
-`off = 0` (left) / `0.5` (right), `A,B` = game projection scales. Column 2 (depth) is left untouched. Confirmed good
-in the headset.
+**Motion blur** (`MotionBlurPerEye`, `BlurMatrixForEyeRawDepth`, `BlurMatrixForEye`). The pass finds where each pixel was in the previous frame with the game's `g_mMatrix`
+(c0..c3, one row per input, columns x, y, w used): `(x', y', w') = q * M`, the previous texture coordinate is `(x'/w', y'/w')`. It is made for one mono camera with the whole
+picture, so its centre of expansion landed on the seam between the eyes (and with an eye's own picture it would radiate from the middle of that picture, wherever the head looks);
+the pass is drawn once per eye, scissored to its half, with a matrix made for that eye. **The game has two kinds of blur shader, and what `q` is depends on the kind**
+(`PixelShaderInfo::blurDepthRaw`, found by looking for an `add` with `c4` = `g_vDepthScale` in the bytecode; checked on all 26): 8 of the 26 (the ones that finish
+with `mul_sat oC0, r0, c4.w`) hand the matrix `q = (u, v, depth, 1)` with the depth as the buffer holds it (`depth = c + d/Z`, `Z` the distance along the view axis, `c, d` = `g_vDepthScale.xy`
+= the projection's depth terms, the same numbers the mod's own projection has); the other 18 (those with depth of field among them, and the two minimal ones) first turn the depth into a distance,
+`z = c4.y / (|depth| - c4.x)`, and hand it `q = (z*u, z*v, z, 1)`. The shader the game uses at its default settings (pixel shader 656 in the log, ps_3_0, 8 constants, run on a target of half
+the side-by-side picture) is of the first kind: a `Log=1` run showed `g_mMatrix` at rest as the 4x4 identity and, while driving, the car's motion in the depth row (c2 = (0.48, 0.39, ., 0.955)) with
+the vanishing point at about (0.51, 0.41) of the picture: a perspective reprojection in (u, v, depth) space.
+**`BlurMatrixForEyeRawDepth`** (the first kind). The game's matrix is a projective map of clip space: `(u, v, depth, 1)` is the clip position divided by `Z`, `(x', y', z', w')` is the previous
+clip position over `Z` (`w' = Z'/Z`; the matrix has no usable z' column, the game leaves it as the identity's). So for an eye the whole thing is linear in homogeneous coordinates and
+one matrix: `(u, v, depth, 1)` of the eye -> the eye camera's `(tan x, tan y, 1, 1/Z)` (`1/Z = (depth - c)/d` is linear in the depth) -> `inv(C)` (`C` = `eyeCameraDelta[eye]`: the head's pose
+and the eye's place in it) -> the game camera's `(Z*u, Z*v, Z*depth, Z)` -> the game's matrix -> `(x', y', w')` -> the point in the previous game camera (`(2x' - w')/A, (w' - 2y')/B, w'`; `A, B` =
+the game's projection scales) with the W of the point carried over as it is -> `C` (the head is held where it is between the frames, only the game camera's motion blurs) -> the eye's
+`(x', y', w')`. At rest the game's matrix is the identity and so is the result. The blur runs along the car's direction of travel whichever way the head looks (the point straight ahead of the
+car has no blur at any head turn: `motion_blur_check.py`). The head's offset from the game camera cancels out of a rigid camera motion, so it makes no difference to the vectors (a version that
+left it out gave the same numbers to a tenth of a thousandth of the picture in the headset). **Seen in the headset** (2026-10-25, Valve Index): the blur runs along the direction of travel
+with the head turned 70 degrees to the side (the road's streaks follow the wall beside it), a few thousandths of the picture long at its edge.
+**`BlurMatrixForEye`** is the same chain for the second kind (`z`, `inv(C)` and `C` as above, the translation of `C` added to the constant row of the result). It has been checked
+against a calculation only, no headset run has used a shader of that kind.
+**What went wrong on the way.** The first version of the head-aware matrix was `BlurMatrixForEye` applied to the shader of the first kind (the second kind had been assumed from the
+disassembly of one of the game's shaders): the whole picture smeared, with streaks that fanned out from the direction of travel but were far too long. It was found by a log of the game's matrix
+(dumps next to the pictures with Num8 were no help without it). The matrix before that (`T * M * S`, the eye's texture coordinates mapped onto the game's picture as if the eye looked where the game
+camera does: `T = [[a1,0,0,0],[0,a2,0,0],[0,0,1,0],[b1,b2,0,1]]`, `a1 = A*(r-l)`, `b1 = 0.5 + 0.5*A*(l - 2*off*(r-l))`, `a2 = 0.5*B*(up+dn)`, `b2 = 0.5 - 0.5*B*up`, `off` 0 / 0.5) is exact for the
+first kind as long as the head looks where the game camera does, which is why it looked right, and it leaves the centre of expansion at the middle of each eye's picture, which was the complaint.
+If a matrix cannot be made (degenerate tangents or delta, no depth terms) the eye is drawn with the game's own matrix and `Log=1` says so once (`motion blur: eye N: no matrix could be made`);
+`Log=1` also writes one `motion blur: pixel shader N (...)` line for each blur shader a run draws, with its kind.
 
-**Motion blur off** (`[VR] MotionBlur=0`, `DrawMotionBlurAsCopy`). The pass cannot just be skipped: its pixel shader writes the whole picture that the
-composite reads next (colour in sampler 0, depth, stencil and noise in 1..3; output rgb = a weighted average of its samples, alpha 1), so a skipped
-draw leaves the target undefined. The draw is made once (no per-eye split, nothing to remap) with the blur's pixel shader swapped for a copy of
-sampler 0 at the pixel's own texture coordinate with alpha 1, which is what the blur gives where nothing moves: one texture read a pixel instead of
-the blur's many (7 to 24 in the straight-line code of the biggest variants, and a loop in 18 of them).
-The game has 26 blur shaders (`g_vStepScale` + `g_mMatrix`, read out of `Blur.exe`): 16 plain ones with a `rep` loop (`g_vSettings`), 8 with the
-`g_vFilter` taps (2 to 5 of them, `g_vSettings1/2`; the game's own name for the pass is `MotionBlurDoF`), and a minimal one in ps_3_0 and one in
-ps_2_0 (`textureMap`/`depthMap`). All of them take the colour image in sampler 0 and the texture coordinate in v0 (t0 in ps_2_0). A Direct3D 9 pixel
-shader has to be of the model of its vertex shader, so there are two copy shaders, hand assembled in `screen_space_passes.cpp`
-(`kMotionBlurCopyShader20` / `30`; the real runtime accepts both, `tools/motion_blur_check.py`), made once on first use through
-`g_deviceOriginals[VT_CreatePixelShader]` (so `H_CreatePixelShader` never sees them) and chosen by `PixelShaderInfo::shaderMajor` (the version token
-of the blur shader). The blur's shader is put back with the original `SetPixelShader` from `g_currentPsHandle` (new, kept by `H_SetPixelShader`
-like `g_currentVsHandle`); the mod's own tracking (`g_currentPsInfo`) never changes. If the handle is not known or the copy shader cannot be made
-(logged), the blur is drawn as the game draws it. **The `g_vFilter` variants probably carry the game's depth-of-field blur as well** (not verified in
-a run): with `MotionBlur=0` that goes too, in any scene that uses it. `Log=1` writes one `motion blur: pixel shader N (ps_3_0, n constants, with the
-g_vFilter taps) drawn as a plain copy` line for each blur shader (8 at most) a run draws, so the next log shows which variant the game really uses.
-The perf probe still counts the pass in its `motion-blur` phase (the classifier runs before the swap), so `[Perf]` shows what is left of it.
+**Motion blur off** (`[VR] MotionBlur=0`, `DrawMotionBlurStill`). The pass cannot just be skipped: its pixel shader writes the texture that the final pass reads next (colour in
+sampler 0, depth, stencil and noise in 1..3), so a skipped draw leaves the target undefined. The draw is made once (no per-eye split, nothing to remap) as the game's own blur draws a picture in
+which nothing moves. **What the blur writes matters, not just its colour:** the shaders that take `(u, v, depth, 1)` (8 of the 26, the one the game uses at its default settings among
+them; they run on a target of half the size of the picture) write `mul_sat oC0.xyz, colour, c4.w` and, as the alpha, `mul_sat oC0.w, |velocity|, c6.z`, the length of the blur, and the final pass
+(`psToneMap...MotionBlur...`: `lrp(scene colour, blur colour, max(blur alpha, ...))`, sampler `motionBlurTexture`) takes the blurred picture by that alpha. The first version of `MotionBlur=0`
+swapped in a plain copy of sampler 0 with an alpha of 1 (taken from the other 18 shaders, whose alpha is a constant): the whole picture then came from the half-size texture, and a headset run
+showed it very blurry. Now, for the kind that takes `(u, v, depth, 1)` as ps_3_0 with `g_vDepthScale` in c4, the blur's pixel shader is swapped for `kMotionBlurStillShader30`, which writes what
+the blur writes at zero velocity, the colour image times `c4.w` (saturated) and an alpha of 0, for one texture read a pixel instead of the blur's twelve. Hand assembled, made once on first use
+through `g_deviceOriginals[VT_CreatePixelShader]` (so `H_CreatePixelShader` never sees it); a Direct3D 9 pixel shader has to be of the model of its vertex shader, and the real ones of this kind are
+all ps_3_0. Every other blur shader is drawn once with its own pixel shader and a matrix that moves nothing (the identity for the kind that takes `(u, v, depth, 1)`, the one that leaves each
+pixel where it is for the kind that takes `(z*u, z*v, z, 1)`): it costs what it did, but writes what the game writes for a picture that does not move, whatever its alpha is. The blur's shader and
+`g_mMatrix` are put back with the original setters (`g_currentPsHandle`, new, kept by `H_SetPixelShader` like `g_currentVsHandle`); the mod's own tracking (`g_currentPsInfo`) never changes. If
+the handle is not known the blur is drawn as the game draws it. **The `g_vFilter` variants carry the game's depth-of-field blur as well** (the game's own name for the pass is `MotionBlurDoF`):
+with `MotionBlur=0` that goes too, in any scene that uses them. `Log=1` writes one `motion blur: pixel shader N (...)` line for each blur shader (8 at most) a run draws, saying which way it was
+drawn. The perf probe still counts the pass in its `motion-blur` phase (the classifier runs before the swap), so `[Perf]` shows what is left of it. **No gain in the frame rate was seen**
+(2026-10-25, Valve Index: about 68 fps with the blur on and with it off): something else limits the frame (in the first measurements, section 13, the CPU did; not measured at this resolution), and the pass is small next to the others (it was too small to be listed
+among the GPU phases of those measurements). The switch is a matter of taste then, a sharper picture without the blur, not a speed-up.
 
-**Checks.** `tools/motion_blur_check.py` links the whole mod and runs `MotionBlurPerEye` on a real Direct3D 9 device with a stand-in for the blur
-(a ps_3_0 and a ps_2_0 shader with the blur's constant table that paint red, each with the vertex shader of its model). With `MotionBlur=0` the target
-must equal the source texture with alpha forced to 1, pixel by pixel, from one draw; the stand-in, the tracking, `g_mMatrix` on the device and the
-game's scissor state must be as before; the copy shader of the right model must be made once, not every frame. With `MotionBlur=1`, or when the
-bound shader's handle is unknown, the stand-in is drawn once per eye (both halves red). Each of: the blur's shader not put back, alpha taken from the
-texture, the colour image read from sampler 1, the switch inverted, the wrong model's shader, no handle guard and a copy shader without its alpha
-constant makes the check fail (tried on copies of the source).
+**Checks.** `tools/motion_blur_check.py` first runs `BlurMatrixForEye` and `BlurMatrixForEyeRawDepth` against a reprojection worked out from first principles (random game cameras, heads
+turned up to 57 degrees about each axis, points in front of the camera: 13000 and 27000 points, worst error 1e-6 of the picture; no blur at the point straight ahead of the car for head turns
+of 0, 25 and 40 degrees either way; for the raw depth kind no vector at all for a car at rest); each fails for a translation left out, the delta not inverted or left out, the projection
+scales swapped, the eye's offset or y sign wrong, the depth terms wrong, the point's W lost and a wrong column (ten mutants of `BlurMatrixForEyeRawDepth`, nine of the other, tried on copies
+of the source). It checks that the parser tells the two kinds of shader apart. Then it links the whole mod and runs `MotionBlurPerEye` on a real Direct3D 9 device with a stand-in for the blur
+(a ps_3_0 and a ps_2_0 shader with the blur's constant table that paint red, each with the vertex shader of its model, and one that adds `g_vDepthScale` like the second kind). With `MotionBlur=0`
+the ps_3_0 stand-in of the first kind must give a target that is the source texture times c4.w (2 in the check) with an alpha of 0, from one draw; every other stand-in must be drawn once
+with its own shader and the matrix that moves nothing, and `g_mMatrix`, the shader, the tracking and the game's scissor state must be as before; the shader for it must be made once, not every
+frame. With `MotionBlur=1`, or when the bound shader's handle is unknown, the stand-in is drawn once per eye (both
+halves red), for either kind. Each of: the blur's shader or matrix not put back, an alpha of 1, no scale by c4.w, a wrong matrix for either kind, the wrong kind or model chosen, and the shader made every frame makes
+the check fail (tried on copies of the source; the saturation cannot be seen on the check's 8-bit target).
 
 **Shadow decals** (`ApplyShadowDecalForEye`). The decal PS rebuilds the pixel's camera-space position from depth and
 screen position: `q = (u*Z, v*Z, k, Z)`, `Z = 0.115/|depth|`, then multiplies by `g_ShadowPlaneSpaceMatrix` to get

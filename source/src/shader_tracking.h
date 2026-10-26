@@ -13,6 +13,9 @@ struct PixelShaderInfo {
     int shaderMajor = 0; // 2 for ps_2_0, 3 for ps_3_0: a pixel shader that stands in for this one must be of the same model (it is paired with the same vertex shader)
     std::vector<ShaderConstant> constants;
     bool motionBlur = false;
+    // The game's blur shaders come in two kinds.  Most of the plain ones (and the minimal ones) hand the matrix the pixel's (u, v, depth, 1) as the depth buffer holds it;
+    // the ones with depth of field and a few others first turn the depth into a distance (an add with g_vDepthScale, c4) and hand it (z*u, z*v, z, 1).  True for the first kind.
+    bool blurDepthRaw = false;
     int shadowMatrixReg = -1;
     int lightPosReg = -1, lightPosCount = 0, viewUpReg = -1, viewRayScaleReg = -1, lightMatrixReg = -1;
     // The game's camera as the main view hands it to pixel shaders (GameWorld/View/Main.cpp): its world position

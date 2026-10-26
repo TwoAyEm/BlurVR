@@ -1,5 +1,6 @@
 // Per-eye versions of the game's screen-space passes: motion blur, shadow decals, deferred lights, and the bloom switch.
 #include "screen_space_passes.h"
+#include <stdarg.h>
 #include "camera.h"
 #include "core.h"
 #include "config.h"
@@ -57,53 +58,55 @@ HRESULT DrawWithoutBloom(IDirect3DDevice9* device, const DrawCall& draw)
 
 // The game's motion-blur pass reprojects every pixel with one camera matrix expressed in the texture coordinates of the
 // whole (side-by-side) image, so its radial centre lands on the seam between the eyes. Run it once per eye instead,
-// with the matrix re-expressed in that eye's own frame.
+// with the matrix re-expressed in that eye's own frame (BlurMatrixForEyeRawDepth, BlurMatrixForEye).
 
-// [VR] MotionBlur=0: the blur's pixel shader is swapped for one that copies the colour image, so the pass still writes the picture the
-// composite reads but costs one texture read a pixel instead of the blur's many. Sampler 0 is the colour image in every variant of the
-// blur (ps_2_0 and ps_3_0 alike), and the vertex shader it is paired with only has to pass the texture coordinate on. A pixel shader has
-// to be of the model of its vertex shader, so there is one of each model. Hand assembled (tools/motion_blur_check.cpp decodes both):
-//   ps_2_0 / ps_3_0, def c0, 1, 1, 1, 1 / dcl t0.xy (v0.xy with texcoord0) / dcl_2d s0 / texld r0, t0 (v0), s0 / mov r0.w, c0.x / mov oC0, r0
-static const DWORD kMotionBlurCopyShader20[] = {
-    0xFFFF0200,
-    0x05000051, 0xA00F0000, 0x3F800000, 0x3F800000, 0x3F800000, 0x3F800000, // def c0, 1, 1, 1, 1
-    0x0200001F, 0x80000000, 0xB0030000,                                     // dcl t0.xy
-    0x0200001F, 0x90000000, 0xA00F0800,                                     // dcl_2d s0
-    0x03000042, 0x800F0000, 0xB0E40000, 0xA0E40800,                         // texld r0, t0, s0
-    0x02000001, 0x80080000, 0xA0000000,                                     // mov r0.w, c0.x
-    0x02000001, 0x800F0800, 0x80E40000,                                     // mov oC0, r0
-    0x0000FFFF};
-static const DWORD kMotionBlurCopyShader30[] = {
+// The register of one of the blur shader's constants, from its constant table (the fallback when the shader does not name it).
+static UINT BlurConstantRegister(const char* name, UINT fallback)
+{
+    if (g_currentPsInfo)
+        for (const ShaderConstant& constant : g_currentPsInfo->constants)
+            if (constant.reg < 250 && NamesEqual(constant.name.c_str(), name))
+                return constant.reg;
+    return fallback;
+}
+
+// [VR] MotionBlur=0: the pass is drawn as the game's own blur draws a picture in which nothing moves, which is a picture without blur. The pass cannot just be skipped: it writes
+// the texture the final pass reads. What the blur writes is the colour (taps along the motion) and, in the shaders that take (u, v, depth, 1) (the one the game uses at its default
+// settings: it runs on half the size of the picture), the length of the blur as its alpha, which the final pass takes the blurred picture by: so a copy with an alpha of 1 shows the
+// whole picture at half its resolution. For a pixel that does not move those shaders write the colour image times g_vDepthScale.w (saturated) and an alpha of 0. That is what this shader
+// writes, for one texture read a pixel instead of the blur's twelve. Sampler 0 is the colour image, c4 g_vDepthScale, and the vertex shader it is paired with only has to pass the
+// texture coordinate on. Hand assembled (tools/motion_blur_check.cpp decodes it):
+//   ps_3_0 / def c1, 0, 0, 0, 0 / dcl_texcoord v0.xy / dcl_2d s0 / texld r0, v0, s0 / mul_sat r0.xyz, r0, c4.w / mov r0.w, c1.x / mov oC0, r0
+static const DWORD kMotionBlurStillShader30[] = {
     0xFFFF0300,
-    0x05000051, 0xA00F0000, 0x3F800000, 0x3F800000, 0x3F800000, 0x3F800000, // def c0, 1, 1, 1, 1
+    0x05000051, 0xA00F0001, 0x00000000, 0x00000000, 0x00000000, 0x00000000, // def c1, 0, 0, 0, 0
     0x0200001F, 0x80000005, 0x90030000,                                     // dcl_texcoord v0.xy
     0x0200001F, 0x90000000, 0xA00F0800,                                     // dcl_2d s0
     0x03000042, 0x800F0000, 0x90E40000, 0xA0E40800,                         // texld r0, v0, s0
-    0x02000001, 0x80080000, 0xA0000000,                                     // mov r0.w, c0.x
+    0x03000005, 0x80170000, 0x80E40000, 0xA0FF0004,                         // mul_sat r0.xyz, r0, c4.w
+    0x02000001, 0x80080000, 0xA0000001,                                     // mov r0.w, c1.x
     0x02000001, 0x800F0800, 0x80E40000,                                     // mov oC0, r0
     0x0000FFFF};
-static IDirect3DDevice9* g_copyShaderDevice = NULL; // the device the copy shaders below belong to
-static IDirect3DPixelShader9* g_copyShader[2] = {NULL, NULL}; // ps_2_0, ps_3_0
-static bool g_copyShaderFailed[2] = {false, false};
+static IDirect3DDevice9* g_stillShaderDevice = NULL; // the device the shader below belongs to
+static IDirect3DPixelShader9* g_stillShader = NULL;
+static bool g_stillShaderFailed = false;
 
-static IDirect3DPixelShader9* CopyShaderFor(IDirect3DDevice9* device, int shaderMajor)
+static IDirect3DPixelShader9* StillShader(IDirect3DDevice9* device)
 {
-    if (device != g_copyShaderDevice) { // (a shader belongs to the device that made it)
-        g_copyShader[0] = g_copyShader[1] = NULL;
-        g_copyShaderFailed[0] = g_copyShaderFailed[1] = false;
-        g_copyShaderDevice = device;
+    if (device != g_stillShaderDevice) { // (a shader belongs to the device that made it)
+        g_stillShader = NULL;
+        g_stillShaderFailed = false;
+        g_stillShaderDevice = device;
     }
-    int slot = shaderMajor >= 3 ? 1 : 0;
-    if (!g_copyShader[slot] && !g_copyShaderFailed[slot]) {
+    if (!g_stillShader && !g_stillShaderFailed) {
         PFN_CreatePixelShader createPixelShader = (PFN_CreatePixelShader)g_deviceOriginals[VT_CreatePixelShader];
-        if (FAILED(createPixelShader(device, slot ? kMotionBlurCopyShader30 : kMotionBlurCopyShader20, &g_copyShader[slot])) ||
-            !g_copyShader[slot]) {
-            g_copyShader[slot] = NULL;
-            g_copyShaderFailed[slot] = true;
-            Log("motion blur: the copy shader (ps_%d_0) could not be created: MotionBlur=0 leaves the blur as the game draws it", slot ? 3 : 2);
+        if (FAILED(createPixelShader(device, kMotionBlurStillShader30, &g_stillShader)) || !g_stillShader) {
+            g_stillShader = NULL;
+            g_stillShaderFailed = true;
+            Log("motion blur: the shader for MotionBlur=0 could not be created: the blur is drawn with a matrix that moves nothing instead");
         }
     }
-    return g_copyShader[slot];
+    return g_stillShader;
 }
 
 // The log says once for each blur shader the game uses (it has 26 variants: sample counts, a filter spread) which one this run draws.
@@ -120,23 +123,132 @@ static void NoteMotionBlurShader(const PixelShaderInfo* info, const char* how)
     bool filter = false;
     for (const ShaderConstant& constant : info->constants)
         filter = filter || NamesEqual(constant.name.c_str(), "g_vFilter");
-    Log("motion blur: pixel shader %d (ps_%d_0, %d constants%s) %s", info->id, info->shaderMajor, (int)info->constants.size(),
-        filter ? ", with the g_vFilter taps" : "", how);
+    Log("motion blur: pixel shader %d (ps_%d_0, %d constants%s, %s) %s", info->id, info->shaderMajor, (int)info->constants.size(),
+        filter ? ", with the g_vFilter taps" : "", info->blurDepthRaw ? "takes the depth as the buffer holds it" : "turns the depth into a distance first", how);
 }
 
-// Draw the pass once with the copy shader in place of the blur's; false when it cannot be done (the caller then blurs as the game does).
-static bool DrawMotionBlurAsCopy(IDirect3DDevice9* device, const DrawCall& draw, HRESULT* result)
+// MotionBlur=0: draw the pass once, without blur; false when it cannot be done (the caller then blurs as the game does).
+static bool DrawMotionBlurStill(IDirect3DDevice9* device, const DrawCall& draw, HRESULT* result)
 {
     if (!g_currentPsHandle || !g_currentPsInfo)
         return false;
-    IDirect3DPixelShader9* copyShader = CopyShaderFor(device, g_currentPsInfo->shaderMajor);
-    if (!copyShader)
-        return false;
-    NoteMotionBlurShader(g_currentPsInfo, "drawn as a plain copy (MotionBlur=0)");
-    PFN_SetPixelShader setPixelShader = (PFN_SetPixelShader)g_deviceOriginals[VT_SetPixelShader]; // (not the hooked one: the tracking keeps the blur's info)
-    setPixelShader(device, copyShader);
+    const PixelShaderInfo* info = g_currentPsInfo;
+    if (info->blurDepthRaw && info->shaderMajor == 3 && BlurConstantRegister("g_vDepthScale", 4) == 4)
+        if (IDirect3DPixelShader9* still = StillShader(device)) {
+            NoteMotionBlurShader(info, "drawn as the picture without blur, from its colour image (MotionBlur=0)");
+            PFN_SetPixelShader setPixelShader = (PFN_SetPixelShader)g_deviceOriginals[VT_SetPixelShader]; // (not the hooked one: the tracking keeps the blur's info)
+            setPixelShader(device, still);
+            *result = draw();
+            setPixelShader(device, (IDirect3DPixelShader9*)g_currentPsHandle);
+            return true;
+        }
+    // any other blur shader: its own, once, with a matrix that moves nothing (the identity for the kind that takes (u, v, depth, 1); for the kind that takes (z*u, z*v, z, 1) the
+    // one that leaves each pixel where it is). The pass then costs what it did, but writes what the game writes for a picture that does not move.
+    static const float kStillRaw[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    static const float kStillDistance[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0};
+    PFN_SetShaderConstantF setPixelConstants = (PFN_SetShaderConstantF)g_deviceOriginals[VT_SetPixelShaderConstantF];
+    float gameMatrix[16];
+    memcpy(gameMatrix, g_psConstants, sizeof(gameMatrix));
+    NoteMotionBlurShader(info, "drawn once with a matrix that moves nothing (MotionBlur=0)");
+    setPixelConstants(device, 0, info->blurDepthRaw ? kStillRaw : kStillDistance, 4);
     *result = draw();
-    setPixelShader(device, (IDirect3DPixelShader9*)g_currentPsHandle);
+    setPixelConstants(device, 0, gameMatrix, 4);
+    return true;
+}
+
+// The game's blur matrix for one eye, for the blur shaders that turn the depth into a distance first (PixelShaderInfo::blurDepthRaw false; 18 of the game's 26, not seen
+// in a headset: the shader the game uses at its default settings is of the other kind, BlurMatrixForEyeRawDepth below). The shader rebuilds each pixel's place from the depth buffer as q = (z*u, z*v, z, 1), z the depth along the view axis and
+// u, v the texture coordinates, and the game's g_mMatrix (c0..c3, columns x, y, w) takes it to where that point was in the previous frame, (x', y', w'): the
+// previous texture coordinate is (x'/w', y'/w') and w' is the point's depth in the previous camera. That is the game's own camera. For an eye the same point is
+//   q of the eye -> a point in the eye's camera -> (inverse of the eye delta: the head's pose and the eye's place in it) -> a point in the game's camera -> the game's q
+//   -> the game's matrix -> (x', y', w') -> the point in the previous game camera -> (the same delta) -> the previous eye camera -> the eye's previous (x', y', w').
+// The head stays where it is between the two frames: only the game camera's motion blurs, a turn of the head does not. And because it is the same world point and the
+// game's own motion that go through the eye's view, the blur runs along the car's direction of travel whichever way the head looks (the first version put the
+// radial centre of the game's blur at the middle of each eye's picture).
+// The translation of the delta acts on the constant 1 which the previous point (X', Y', Z') has no room for in a row vector, so it is added to the constant row.
+bool BlurMatrixForEye(const float* original, const EyeBox& box, int eye, const Matrix4& delta, double projX, double projY, float* out)
+{
+    const double width = box.right - box.left, height = box.up + box.down, offset = eye ? 0.5 : 0.0;
+    if (fabs(width) < 1e-6 || fabs(height) < 1e-6 || fabs(projX) < 1e-6 || fabs(projY) < 1e-6)
+        return false;
+    // (X, Y, Z, 1) of the eye's camera -> (Z*u, Z*v, Z, 1), u and v the texture coordinates in the side-by-side picture (the eye's tangent box spans its half)
+    const double eyeIn[16] = {1 / (2 * width), 0, 0, 0, 0, -1 / height, 0, 0, offset - box.left / (2 * width), box.up / height, 1, 0, 0, 0, 0, 1};
+    // and the way back out, as the shader reads it: (X, Y, Z, 1) -> (Z*u, Z*v, unused, Z)
+    const double eyeOut[16] = {1 / (2 * width), 0, 0, 0, 0, -1 / height, 0, 0, offset - box.left / (2 * width), box.up / height, 0, 1, 0, 0, 0, 0};
+    // the same for the game's camera, which has the whole picture
+    const double gameIn[16] = {0.5 * projX, 0, 0, 0, 0, -0.5 * projY, 0, 0, 0.5, 0.5, 1, 0, 0, 0, 0, 1};
+    // (x', y', unused, w') -> (X', Y', Z', 0): the point the game's matrix finds, in the previous game camera
+    const double gameBack[16] = {2 / projX, 0, 0, 0, 0, -2 / projY, 0, 0, 0, 0, 0, 0, -1 / projX, 1 / projY, 1, 0};
+    Matrix4 eyeInMatrix, eyeOutMatrix, gameInMatrix, gameBackMatrix, game, eyeInInverse, deltaInverse;
+    memcpy(eyeInMatrix.m, eyeIn, sizeof(eyeIn));
+    memcpy(eyeOutMatrix.m, eyeOut, sizeof(eyeOut));
+    memcpy(gameInMatrix.m, gameIn, sizeof(gameIn));
+    memcpy(gameBackMatrix.m, gameBack, sizeof(gameBack));
+    if (!Invert(eyeInMatrix, eyeInInverse) || !Invert(delta, deltaInverse))
+        return false;
+    for (int i = 0; i < 4; i++) {
+        game.m[i][0] = original[i * 4];
+        game.m[i][1] = original[i * 4 + 1];
+        game.m[i][2] = 0;
+        game.m[i][3] = original[i * 4 + 3];
+    }
+    const Matrix4 toGame = Multiply(Multiply(eyeInInverse, deltaInverse), gameInMatrix);
+    Matrix4 result = Multiply(Multiply(Multiply(Multiply(toGame, game), gameBackMatrix), delta), eyeOutMatrix);
+    for (int j = 0; j < 4; j++)
+        result.m[3][j] += delta.m[3][0] * eyeOutMatrix.m[0][j] + delta.m[3][1] * eyeOutMatrix.m[1][j] + delta.m[3][2] * eyeOutMatrix.m[2][j];
+    for (int i = 0; i < 4; i++) {
+        out[i * 4] = (float)result.m[i][0];
+        out[i * 4 + 1] = (float)result.m[i][1];
+        out[i * 4 + 2] = original[i * 4 + 2];
+        out[i * 4 + 3] = (float)result.m[i][3];
+    }
+    return true;
+}
+
+// The same for the blur shaders that hand the matrix the pixel's (u, v, depth, 1) as the depth buffer holds it (PixelShaderInfo::blurDepthRaw: 8 of the game's 26, among them the
+// shader it uses at its default settings; at rest its g_mMatrix is the 4x4 identity and the car's motion is in the depth row and the last column).
+// The depth buffer holds depth = c + d/Z (Z the distance along the view axis, c and d the projection's depth terms, g_vDepthScale.xy), so (u, v, depth, 1) is, up to a scale of Z,
+// the clip space position of the pixel and the game's matrix is a projective map of clip space: the previous place is (x'/w', y'/w') and w' is Z'/Z. All of it is linear in homogeneous
+// coordinates, so the whole chain is one matrix:
+//   (u, v, depth, 1) of the eye -> the eye camera's (X, Y, Z, W) up to a scale (tangents, 1, 1/Z) -> (inverse of the delta) -> the game camera's -> (Z*u, Z*v, Z*depth, Z) of the game
+//   -> the game's matrix -> (x', y', w') -> the point in the previous game camera -> (the delta) -> the previous eye camera -> the eye's (x', y', w').
+// The one thing the game's matrix does not give back is the point's W (it has no column for it); a rigid motion keeps it, so it is carried over as it is. The head stays where it is
+// between the two frames: only the game camera's motion blurs. At rest the game's matrix is the identity and so is the result.
+bool BlurMatrixForEyeRawDepth(const float* original, const EyeBox& box, int eye, const Matrix4& delta, double projX, double projY, double depthC, double depthD, float* out)
+{
+    const double width = box.right - box.left, height = box.up + box.down, offset = eye ? 0.5 : 0.0;
+    if (fabs(width) < 1e-6 || fabs(height) < 1e-6 || fabs(projX) < 1e-6 || fabs(projY) < 1e-6 || fabs(depthD) < 1e-9)
+        return false;
+    // (u, v, depth, 1) of the eye -> (tan x, tan y, 1, 1/Z): the direction through the pixel, and the inverse distance, which the depth buffer holds linearly (1/Z = (depth - c) / d)
+    const double eyeIn[16] = {2 * width, 0, 0, 0, 0, -height, 0, 0, 0, 0, 0, 1 / depthD, box.left - 2 * width * offset, box.up, 1, -depthC / depthD};
+    // (X, Y, Z, W) of the game camera -> (Z*u, Z*v, Z*depth, Z) when W is 1
+    const double gameIn[16] = {0.5 * projX, 0, 0, 0, 0, -0.5 * projY, 0, 0, 0.5, 0.5, depthC, 1, 0, 0, depthD, 0};
+    // (x', y', unused, w') -> (X', Y', Z', 0): the point the game's matrix finds, in the previous game camera
+    const double gameBack[16] = {2 / projX, 0, 0, 0, 0, -2 / projY, 0, 0, 0, 0, 0, 0, -1 / projX, 1 / projY, 1, 0};
+    // (X, Y, Z, W) of the eye camera -> (Z*u, Z*v, unused, Z), as the shader reads the matrix
+    const double eyeOut[16] = {1 / (2 * width), 0, 0, 0, 0, -1 / height, 0, 0, offset - box.left / (2 * width), box.up / height, 0, 1, 0, 0, 0, 0};
+    Matrix4 eyeInMatrix, gameInMatrix, gameBackMatrix, eyeOutMatrix, game, deltaInverse;
+    memcpy(eyeInMatrix.m, eyeIn, sizeof(eyeIn));
+    memcpy(gameInMatrix.m, gameIn, sizeof(gameIn));
+    memcpy(gameBackMatrix.m, gameBack, sizeof(gameBack));
+    memcpy(eyeOutMatrix.m, eyeOut, sizeof(eyeOut));
+    if (!Invert(delta, deltaInverse))
+        return false;
+    for (int i = 0; i < 4; i++) {
+        game.m[i][0] = original[i * 4];
+        game.m[i][1] = original[i * 4 + 1];
+        game.m[i][2] = 0;
+        game.m[i][3] = original[i * 4 + 3];
+    }
+    Matrix4 previousPoint = Multiply(Multiply(gameInMatrix, game), gameBackMatrix);
+    previousPoint.m[3][3] += 1; // (the W of the point as it was)
+    const Matrix4 result = Multiply(Multiply(Multiply(Multiply(eyeInMatrix, deltaInverse), previousPoint), delta), eyeOutMatrix);
+    for (int i = 0; i < 4; i++) {
+        out[i * 4] = (float)result.m[i][0];
+        out[i * 4 + 1] = (float)result.m[i][1];
+        out[i * 4 + 2] = original[i * 4 + 2];
+        out[i * 4 + 3] = (float)result.m[i][3];
+    }
     return true;
 }
 
@@ -144,7 +256,7 @@ HRESULT MotionBlurPerEye(IDirect3DDevice9* device, const DrawCall& draw)
 {
     if (!g_cfg.motionBlur) {
         HRESULT copied = D3D_OK;
-        if (DrawMotionBlurAsCopy(device, draw, &copied))
+        if (DrawMotionBlurStill(device, draw, &copied))
             return copied;
     } else if (g_currentPsInfo)
         NoteMotionBlurShader(g_currentPsInfo, "drawn per eye");
@@ -155,48 +267,19 @@ HRESULT MotionBlurPerEye(IDirect3DDevice9* device, const DrawCall& draw)
     memcpy(originalConstants, g_psConstants,
            sizeof(originalConstants)); // g_mMatrix: c0..c3 (rows u, v, depth, 1; columns x, y, w used)
     HRESULT hr = D3D_OK;
+    const bool rawDepth = g_currentPsInfo && g_currentPsInfo->blurDepthRaw;
+    const float* depthTerms = &g_psConstants[BlurConstantRegister("g_vDepthScale", 4) * 4]; // c and d of the game's projection: depth = c + d/Z
     setRenderState(device, D3DRS_SCISSORTESTENABLE, TRUE);
     for (int eye = 0; eye < 2; eye++) {
-        const EyeBox& box = g_vr.eyeBox[eye];
-        double xOffset = eye ? 0.5 : 0.0, tanWidth = box.right - box.left, tanHeight = box.up + box.down;
-        double a1 = g_projXScale * tanWidth,
-               b1 = 0.5 +
-                    0.5 * g_projXScale *
-                        (box.left -
-                         2 * xOffset * tanWidth); // eye texcoord u -> "virtual full-screen" u of the game's own camera
-        double a2 = 0.5 * g_projYScale * tanHeight,
-               b2 = 0.5 - 0.5 * g_projYScale * box.up; // eye texcoord v -> virtual v
-        if (fabs(a1) < 1e-6 || fabs(a2) < 1e-6)
-            continue;
-        double original[4][4], toVirtual[4][4] = {{a1, 0, 0, 0}, {0, a2, 0, 0}, {0, 0, 1, 0}, {b1, b2, 0, 1}};
-        double fromVirtual[4][4] = {{1 / a1, 0, 0, 0}, {0, 1 / a2, 0, 0}, {0, 0, 1, 0}, {-b1 / a1, -b2 / a2, 0, 1}};
-        for (int i = 0; i < 4; i++) {
-            original[i][0] = originalConstants[i * 4];
-            original[i][1] = originalConstants[i * 4 + 1];
-            original[i][2] = 0;
-            original[i][3] = originalConstants[i * 4 + 3];
-        }
-        double product[4][4], remapped[4][4];
-        for (int i = 0; i < 4; i++)
-            for (int j = 0; j < 4; j++) {
-                double v = 0;
-                for (int k = 0; k < 4; k++)
-                    v += toVirtual[i][k] * original[k][j];
-                product[i][j] = v;
-            }
-        for (int i = 0; i < 4; i++)
-            for (int j = 0; j < 4; j++) {
-                double v = 0;
-                for (int k = 0; k < 4; k++)
-                    v += product[i][k] * fromVirtual[k][j];
-                remapped[i][j] = v;
-            }
         float newConstants[16];
-        for (int i = 0; i < 4; i++) {
-            newConstants[i * 4] = (float)remapped[i][0];
-            newConstants[i * 4 + 1] = (float)remapped[i][1];
-            newConstants[i * 4 + 2] = originalConstants[i * 4 + 2];
-            newConstants[i * 4 + 3] = (float)remapped[i][3];
+        const bool made = rawDepth ? BlurMatrixForEyeRawDepth(originalConstants, g_vr.eyeBox[eye], eye, g_vr.eyeCameraDelta[eye], g_projXScale, g_projYScale, depthTerms[0], depthTerms[1], newConstants)
+                                   : BlurMatrixForEye(originalConstants, g_vr.eyeBox[eye], eye, g_vr.eyeCameraDelta[eye], g_projXScale, g_projYScale, newConstants);
+        if (!made) { // (a degenerate eye: the game's own matrix, the eye is still drawn)
+            static int reported = 0;
+            if (reported++ < 4)
+                Log("motion blur: eye %d: no matrix could be made (tangents l %.3f r %.3f up %.3f down %.3f, projection scales %.4f %.4f): the game's own matrix is used", eye, g_vr.eyeBox[eye].left,
+                    g_vr.eyeBox[eye].right, g_vr.eyeBox[eye].up, g_vr.eyeBox[eye].down, g_projXScale, g_projYScale);
+            memcpy(newConstants, originalConstants, sizeof(newConstants));
         }
         setPixelConstants(device, 0, newConstants, 4);
         RECT r;

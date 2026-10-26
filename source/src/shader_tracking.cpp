@@ -117,12 +117,19 @@ void ParsePixelShaderConstants(const DWORD* fn, PixelShaderInfo* info)
     info->shaderMajor = (int)((fn[0] >> 8) & 0xFF); // version token 0xFFFF0300 = ps_3_0
     // whole token stream (comment blocks are skipped by their length field, instructions by theirs)
     const DWORD* token = fn + 1;
+    bool addsDepthScale = false; // an `add` with c4 (g_vDepthScale) as an operand: the depth is turned into a distance
     for (int guard = 0; guard < 20000; guard++) {
         DWORD tokenWord = *token;
         if (tokenWord == 0x0000FFFF) {
             token++;
             break;
         }
+        if ((tokenWord & 0xFFFF) == 0x0002 && ((tokenWord >> 24) & 0xF) == 3) // D3DSIO_ADD dst, src0, src1
+            for (int operand = 2; operand <= 3; operand++) {
+                const DWORD source = token[operand];
+                if ((source & 0x7FF) == 4 && (((source >> 28) & 7) | ((source >> 8) & 0x18)) == 2 /*D3DSPR_CONST*/)
+                    addsDepthScale = true;
+            }
         if ((tokenWord & 0xFFFF) == 0xFFFE) {
             DWORD length = (tokenWord >> 16) & 0x7FFF;
             if (length >= 2 && token[1] == 0x42415443) {
@@ -156,6 +163,7 @@ void ParsePixelShaderConstants(const DWORD* fn, PixelShaderInfo* info)
             hasStepScale = true;
     }
     info->motionBlur = hasMatrix && hasStepScale;
+    info->blurDepthRaw = info->motionBlur && !addsDepthScale;
     for (const ShaderConstant& constant : info->constants) {
         if (constant.reg >= 250)
             continue;
