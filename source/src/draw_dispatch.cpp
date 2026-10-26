@@ -98,6 +98,126 @@ static bool CoverageOfCandidate(IDirect3DDevice9* device, const D3DVIEWPORT9& ba
     return entry.got && entry.frac >= minFrac;
 }
 
+// The planar reflection pass ([VR] Reflections=0, numpad 5 in game) and, as a test, the shadow maps (numpad 4) are left out in races.  The reflection pass is left out at the
+// game's own switch where that is found (ApplyReflectionSwitch), else at the draw call; a shadow map is taken for a draw into a square render target of 256 or more that is not
+// the back buffer.  What was left out at the draw call is counted by render target and logged every few seconds, so a run shows what was caught.
+struct SkipCount {
+    int kind; // 0 shadow map, 1 reflection pass
+    UINT width, height;
+    unsigned count;
+};
+static SkipCount g_skipCounts[8];
+static int g_skipCountUsed = 0;
+static unsigned long long g_skipReported = 0;
+// The game's own switch for its planar reflection pass is a tweakable (Amax.Views.ReflectionEnable, a byte).  The reflection function (0x4297F0 in the Steam build) starts with
+// `sub esp,0x208 / cmp byte [flag],0 / push ebx / push ebp / push esi / push edi / mov ebp,ecx / je ...` and returns at once when the byte is 0, so before any culling, state
+// setting or drawing: with it the pass is left out at the source and the game's own work for it goes too, which leaving out the draw calls does not (the game still prepares each
+// draw).  The function is found by those bytes, once, when the switch is first used (in a race, so the game's code is long unpacked).
+static volatile BYTE* g_reflectionFlag = NULL;
+static BYTE g_reflectionFlagGame = 1; // what the byte was before the first switch
+static bool g_reflectionFlagSearched = false;
+static unsigned g_reflectionFlagWrites = 0;
+static volatile BYTE* FindReflectionEnableFlag()
+{
+    static const BYTE pattern[] = {0x81, 0xEC, 0x08, 0x02, 0x00, 0x00, 0x80, 0x3D, 0, 0, 0, 0, 0x00, 0x53, 0x55, 0x56, 0x57, 0x8B, 0xE9, 0x0F, 0x84};
+    BYTE* base = (BYTE*)GetModuleHandleA(NULL);
+    if (!base)
+        return NULL;
+    IMAGE_DOS_HEADER* dos = (IMAGE_DOS_HEADER*)base;
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + dos->e_lfanew);
+    IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(nt);
+    unsigned matches = 0;
+    const BYTE* found = NULL;
+    for (WORD s = 0; s < nt->FileHeader.NumberOfSections; s++) {
+        if (!(sections[s].Characteristics & IMAGE_SCN_MEM_EXECUTE) || !strncmp((const char*)sections[s].Name, ".bind", 8))
+            continue;
+        const BYTE* code = base + sections[s].VirtualAddress;
+        DWORD size = sections[s].Misc.VirtualSize ? sections[s].Misc.VirtualSize : sections[s].SizeOfRawData;
+        for (DWORD i = 0; i + sizeof(pattern) <= size; i++) {
+            if (code[i] != 0x81 || code[i + 1] != 0xEC)
+                continue;
+            bool same = true;
+            for (size_t k = 0; k < sizeof(pattern) && same; k++)
+                if (!(k >= 8 && k < 12) && code[i + k] != pattern[k])
+                    same = false;
+            if (same) {
+                matches++;
+                found = code + i;
+            }
+        }
+    }
+    if (matches != 1) {
+        Log("reflections: the game's reflection function was found %u times; the pass is left out at the draw call instead", matches);
+        return NULL;
+    }
+    BYTE* flag = *(BYTE**)(found + 8);
+    MEMORY_BASIC_INFORMATION info;
+    if (!VirtualQuery(flag, &info, sizeof(info)) || info.State != MEM_COMMIT || !(info.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) || *flag > 1) {
+        Log("reflections: the byte the game's reflection function tests (%p) is not a writable flag; the pass is left out at the draw call instead", flag);
+        return NULL;
+    }
+    Log("reflections: the game's own switch (Amax.Views.ReflectionEnable) is the byte at %p, now %u (the function at %p)", flag, (unsigned)*flag, found);
+    return flag;
+}
+// The setting is for races: the showroom is a 3D scene too (IsRaceMode()), but its floor keeps the reflection.
+static bool ReflectionsLeftOut()
+{
+    return g_cfg.skipReflections && IsRaceMode() && !InMenuScene();
+}
+// Once a frame: the byte is 0 while the setting leaves the reflections out and a race is on, and what the game had made it otherwise.
+// It is written every frame it differs, so a level that sets the tweakable again does not bring the pass back.
+void ApplyReflectionSwitch()
+{
+    const bool off = ReflectionsLeftOut();
+    if (!g_reflectionFlagSearched && !off)
+        return; // (the game's byte is not touched until a race needs it off)
+    if (!g_reflectionFlagSearched) {
+        g_reflectionFlagSearched = true;
+        g_reflectionFlag = FindReflectionEnableFlag();
+        if (g_reflectionFlag)
+            g_reflectionFlagGame = *g_reflectionFlag;
+    }
+    if (!g_reflectionFlag)
+        return;
+    const BYTE wanted = off ? 0 : g_reflectionFlagGame;
+    if (*g_reflectionFlag != wanted) {
+        *g_reflectionFlag = wanted;
+        if (g_reflectionFlagWrites++ < 20)
+            Log("reflections: the game's reflection pass is %s at the source (the byte is now %u)", off ? "OFF" : "back on", (unsigned)wanted);
+    }
+}
+static bool TestSkipDraw(int plan)
+{
+    int kind = -1;
+    if (!g_reflectionFlag && plan == 1 && IsReflectionPass() && ReflectionsLeftOut()) // (no game switch found: the draws are left out)
+        kind = 1;
+    else if (g_cfg.skipShadows && plan == 0 && g_vr.active && g_rtWidth >= 256 && g_rtWidth == g_rtHeight && g_renderTarget0 != g_backBufferSurface && IsRaceMode())
+        kind = 0;
+    if (kind < 0)
+        return false;
+    int slot = -1;
+    for (int i = 0; i < g_skipCountUsed; i++)
+        if (g_skipCounts[i].kind == kind && g_skipCounts[i].width == g_rtWidth && g_skipCounts[i].height == g_rtHeight)
+            slot = i;
+    if (slot < 0 && g_skipCountUsed < 8) {
+        slot = g_skipCountUsed++;
+        g_skipCounts[slot] = {kind, g_rtWidth, g_rtHeight, 0};
+    }
+    if (slot >= 0)
+        g_skipCounts[slot].count++;
+    const unsigned long long now = GetTickCount64();
+    if (!g_skipReported)
+        g_skipReported = now;
+    else if (now - g_skipReported >= 3000) {
+        for (int i = 0; i < g_skipCountUsed; i++)
+            Log("left out: %s: %u draws into %ux%u in the last %.0f s", g_skipCounts[i].kind ? "reflection pass" : "shadow map", g_skipCounts[i].count, g_skipCounts[i].width,
+                g_skipCounts[i].height, (double)(now - g_skipReported) / 1000.0);
+        g_skipCountUsed = 0;
+        g_skipReported = now;
+    }
+    return true;
+}
+
 // 0 = normal draw, 1 = main-pass scene draw (stereo), 2 = HUD draw (per eye)
 static int ClassifyDraw(IDirect3DDevice9* device)
 {
@@ -405,6 +525,8 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
         }
     }
     int plan = ClassifyDraw(device);
+    if ((g_cfg.skipShadows || g_cfg.skipReflections) && TestSkipDraw(plan))
+        return D3D_OK;
     perf.Classified(plan);
     if (plan != 1)
         DeviceRestoreAll(device); // only the per-eye draws below may find the device with the game's constants rewritten

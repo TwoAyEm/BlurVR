@@ -946,6 +946,70 @@ static int MirrorCheck(Rng& rng)
         check(restored == trials, "the game's plane is back on the device when the per-eye draws are over");
         check(quiet == quietTrials && quietTrials > 0, "with the game's clip plane off, the mod does not touch the device's plane");
     }
+    printf("the test switches that leave the shadow maps and the reflection passes out:\n");
+    {
+        const int savedMode = g_modeOverride;
+        const bool savedSeen = g_levelFilesSeen;
+        char savedLevel[64];
+        strcpy(savedLevel, g_currentLevel);
+        IDirect3DSurface9* const kShadow = (IDirect3DSurface9*)0x3300;
+        unsigned counts[5][3]; // by switch setting (none, shadows, reflections, both, reflections in the showroom) and draw (shadow map, reflection scene draw, main scene draw)
+        for (int setting = 0; setting < 5; setting++) {
+            g_cfg.skipShadows = setting == 1 || setting == 3;
+            g_cfg.skipReflections = setting >= 2;
+            g_levelFilesSeen = true;
+            if (setting == 4) { // the showroom, as the game's file opens tell it
+                g_modeOverride = 0;
+                strcpy(g_currentLevel, "showroom");
+            } else {
+                g_modeOverride = 2;
+                strcpy(g_currentLevel, "track");
+            }
+            for (int what = 0; what < 3; what++) {
+                SetEyes(rng);
+                Matrix4 world = Rigid(rng, 3.0, 40.0);
+                Matrix4 view = ViewOf(what == 2 ? head : mirror);
+                float registers[8 * 4];
+                StoreMatrix(Multiply(world, Multiply(view, projection)), kLayout, &registers[0]);
+                StoreMatrix(Multiply(world, view), kLayout, &registers[16]);
+                FlushDeviceState();
+                const unsigned long long frame = 800 + 3 * setting + what;
+                publish(head, frame);
+                ResetMainSizedReflectionTarget();
+                if (what == 0) { // a shadow map: a square target of its own, drawn through the light's camera
+                    setTarget(kShadow, 1024, 1024);
+                    g_vr.frameCount = frame;
+                } else if (what == 1) {
+                    draw(mirror, kReflection, frame);
+                    setTarget(kReflection, 2160, 1071);
+                } else {
+                    draw(head, kMain, frame);
+                    setTarget(kMain, 2160, 1071);
+                }
+                g_currentVsInfo = (VertexShaderInfo*)sceneShaders[what & 1];
+                g_currentPsInfo = g_psPool[K_SCENE][0];
+                GameSetVs(0, 8, registers);
+                const unsigned long long before = g_drawCalls;
+                RunDraw((IDirect3DDevice9*)&g_fakeDevice, DrawCall([&]() {
+                            g_drawCalls++;
+                            return D3D_OK;
+                        }));
+                counts[setting][what] = (unsigned)(g_drawCalls - before);
+            }
+        }
+        g_cfg.skipShadows = g_cfg.skipReflections = 0;
+        g_modeOverride = savedMode;
+        g_levelFilesSeen = savedSeen;
+        strcpy(g_currentLevel, savedLevel);
+        printf("  (draws issued; shadow map / reflection scene draw / main scene draw: none %u/%u/%u, shadows off %u/%u/%u, reflections off %u/%u/%u, both off %u/%u/%u, reflections off in the showroom %u/%u/%u)\n",
+               counts[0][0], counts[0][1], counts[0][2], counts[1][0], counts[1][1], counts[1][2], counts[2][0], counts[2][1], counts[2][2], counts[3][0], counts[3][1], counts[3][2], counts[4][0],
+               counts[4][1], counts[4][2]);
+        check(counts[0][0] == 1 && counts[0][1] == 2 && counts[0][2] == 2, "with both switches off every draw is made (a shadow map draw once, the scene draws once for each eye)");
+        check(counts[1][0] == 0 && counts[1][1] == 2 && counts[1][2] == 2, "shadows off leaves out the shadow map draw only");
+        check(counts[2][0] == 1 && counts[2][1] == 0 && counts[2][2] == 2, "reflections off leaves out the reflection scene draw only");
+        check(counts[3][0] == 0 && counts[3][1] == 0 && counts[3][2] == 2, "both off leaves out both and never the main scene");
+        check(counts[4][1] == 2 && counts[4][2] == 2, "the setting is for races: the showroom's floor keeps its reflection");
+    }
     printf(failures ? "mirror: %d FAILURE(S)\n" : "mirror: all checks passed\n", failures);
     return failures ? 1 : 0;
 }

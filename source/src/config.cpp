@@ -145,6 +145,7 @@ void LoadConfig()
     g_cfg.bloomPct = g_cfg.vr ? ReadIniInt("VR", "Bloom", 100) : 100;
     g_cfg.skipLensFlares = g_cfg.vr ? ReadIniInt("VR", "NoLensFlare", 0) : 0;
     g_cfg.motionBlur = g_cfg.vr ? ReadIniInt("VR", "MotionBlur", 1) : 1;
+    g_cfg.skipReflections = g_cfg.vr && !ReadIniInt("VR", "Reflections", 1) ? 1 : 0;
     g_cfg.reflectionFlipMode = ReadIniInt("Render", "ReflectionFlip", -1);
     g_cfg.hudXOffset = ReadIniDouble("Hud", "XOffset", 0.0);
     g_cfg.hudScale = ReadIniDouble("Hud", "Scale", 0.6);
@@ -159,6 +160,7 @@ void LoadConfig()
     g_cfg.keyPerf = ReadIniInt("Debug", "KeyPerf", 0x67);
     g_cfg.keyDump = ReadIniInt("Debug", "KeyDump", 0x68);
     g_cfg.keyFps = ReadIniInt("Debug", "KeyFps", 0x69);
+    g_cfg.keyReflections = ReadIniInt("Debug", "KeyReflections", 0x65);
     g_cfg.fpsCounter = g_cfg.vr ? ReadIniInt("VR", "FpsCounter", 0) : 0; // (it is drawn into the headset's picture: flat, there is none)
     g_cfg.coverageEvery = ReadIniInt("Hud", "CoverageEvery", 8);
     g_cfg.desktopPresentEvery = ReadIniInt("VR", "DesktopPresentEvery", 1, "Render");
