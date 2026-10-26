@@ -27,6 +27,9 @@ struct XrRuntimeState {
     HMODULE loader = NULL;
     PFN_xrGetInstanceProcAddr getProc = NULL;
     PFN_xrGetD3D11GraphicsRequirementsKHR getD3D11Requirements = NULL;
+    PFN_xrGetDisplayRefreshRateFB getDisplayRefreshRate = NULL; // (only with XR_FB_display_refresh_rate, when the runtime offers it)
+    float reportedHz = 0;                                       // what it said last (0 = nothing)
+    unsigned long long reportedAt = 0;
     Functions fn;
     XrInstance instance = XR_NULL_HANDLE;
     XrSystemId systemId = XR_NULL_SYSTEM_ID;
@@ -37,7 +40,11 @@ struct XrRuntimeState {
     bool frameBegun = false, shouldRender = false, posesLocated = false;
     XrTime displayTime = 0;
     XrDuration displayPeriod = 0; // nanoseconds, as xrWaitFrame last reported it (0 = none yet)
+    XrDuration refreshPeriod = 0; // the first plausible display period the runtime gave: the headset's refresh period (0 = none yet)
     double loggedHz = 0;
+    double periodMin = 1e18, periodMax = 0, periodSum = 0; // the display periods of the last few seconds, for the log
+    unsigned periodCount = 0, periodReports = 0;
+    unsigned long long periodReportedAt = 0;
     XrFovf fov[2];          // the field of view of each eye as the runtime gave it at start: the one the picture is submitted with
     XrPosef eyePose[2];     // this frame's eyes in the local space
     float eyeToHead[2][3][4];
@@ -144,6 +151,42 @@ static void EndFrame(const XrCompositionLayerBaseHeader* const* layers, uint32_t
             Log("OpenXR: xrEndFrame failed: %s", ResultText(result));
     }
 }
+// SteamVR's predictedDisplayPeriod is not the headset's refresh period.  It follows the pace of the frames just submitted: 8.33 ms for a 120 Hz headset when the session
+// starts, then anything from 6.5 to 42 ms in steps of 3.3 ms while the game runs.  The first plausible value, given before a frame was submitted, is the refresh period, and
+// that is what the FPS counter's colours are measured against.  The periods of the last few seconds are logged (min / mean / max) to see what a runtime does.
+static void NoteDisplayPeriod(XrDuration period)
+{
+    if (g_xr.getDisplayRefreshRate && g_xr.session != XR_NULL_HANDLE && GetTickCount64() - g_xr.reportedAt >= 1000) { // the runtime's own word for it, which follows a change in its settings
+        g_xr.reportedAt = GetTickCount64();
+        float hz = 0;
+        if (XR_SUCCEEDED(g_xr.getDisplayRefreshRate(g_xr.session, &hz)) && hz >= 20.0f && hz <= 1000.0f) {
+            if (fabsf(hz - g_xr.reportedHz) > 0.5f)
+                Log("OpenXR: the headset's refresh rate is %.1f Hz (xrGetDisplayRefreshRateFB%s)", hz, g_xr.reportedHz > 0 ? ", it changed" : "");
+            g_xr.reportedHz = hz;
+        }
+    }
+    if (g_xr.refreshPeriod == 0 && period >= 4000000 && period <= 50000000) {
+        g_xr.refreshPeriod = period;
+        Log("OpenXR: the refresh rate for the FPS counter is the first display period the runtime gave: %.2f ms (%.1f Hz)", (double)period / 1e6, 1e9 / (double)period);
+    }
+    const double ms = (double)period / 1e6;
+    g_xr.periodMin = fmin(g_xr.periodMin, ms);
+    g_xr.periodMax = fmax(g_xr.periodMax, ms);
+    g_xr.periodSum += ms;
+    g_xr.periodCount++;
+    const unsigned long long now = GetTickCount64();
+    if (!g_xr.periodReportedAt)
+        g_xr.periodReportedAt = now;
+    else if (now - g_xr.periodReportedAt >= 5000) {
+        if (g_xr.periodReports++ < 8)
+            Log("OpenXR: display period over the last %.0f s: %.2f / %.2f / %.2f ms (min / mean / max) in %u frames; the FPS counter measures against %.1f Hz", (double)(now - g_xr.periodReportedAt) / 1000.0,
+                g_xr.periodMin, g_xr.periodSum / g_xr.periodCount, g_xr.periodMax, g_xr.periodCount, XrRuntimeRefreshHz());
+        g_xr.periodMin = 1e18;
+        g_xr.periodMax = g_xr.periodSum = 0;
+        g_xr.periodCount = 0;
+        g_xr.periodReportedAt = now;
+    }
+}
 static bool BeginFrame()
 {
     XrFrameWaitInfo waitInfo = {XR_TYPE_FRAME_WAIT_INFO};
@@ -173,6 +216,7 @@ static bool BeginFrame()
             g_xr.loggedHz = hz;
             Log("OpenXR: display period %.2f ms (%.1f Hz)", (double)state.predictedDisplayPeriod / 1e6, hz);
         }
+        NoteDisplayPeriod(state.predictedDisplayPeriod);
     }
     // SteamVR keeps a new application SYNCHRONIZED, with shouldRender false, until it has submitted a frame that has layers: that frame is rendered
     g_xr.shouldRender = state.shouldRender != 0 || g_xr.sessionState == XR_SESSION_STATE_SYNCHRONIZED;
@@ -317,6 +361,50 @@ static bool LoadFunctions()
     }
     return true;
 }
+static bool ExtensionListed(const char* wanted)
+{
+    PFN_xrEnumerateInstanceExtensionProperties enumerate = NULL;
+    if (XR_FAILED(g_xr.getProc(XR_NULL_HANDLE, "xrEnumerateInstanceExtensionProperties", (PFN_xrVoidFunction*)&enumerate)) || !enumerate)
+        return false;
+    uint32_t count = 0;
+    if (XR_FAILED(enumerate(NULL, 0, &count, NULL)))
+        return false;
+    std::vector<XrExtensionProperties> extensions(count, XrExtensionProperties{XR_TYPE_EXTENSION_PROPERTIES});
+    if (XR_FAILED(enumerate(NULL, count, &count, extensions.data())))
+        return false;
+    for (const XrExtensionProperties& extension : extensions)
+        if (!strcmp(extension.extensionName, wanted))
+            return true;
+    return false;
+}
+// What the runtime offers, in the log (a few lines of names), once.
+static void LogExtensions()
+{
+    PFN_xrEnumerateInstanceExtensionProperties enumerate = NULL;
+    if (XR_FAILED(g_xr.getProc(XR_NULL_HANDLE, "xrEnumerateInstanceExtensionProperties", (PFN_xrVoidFunction*)&enumerate)) || !enumerate)
+        return;
+    uint32_t count = 0;
+    if (XR_FAILED(enumerate(NULL, 0, &count, NULL)))
+        return;
+    std::vector<XrExtensionProperties> extensions(count, XrExtensionProperties{XR_TYPE_EXTENSION_PROPERTIES});
+    if (XR_FAILED(enumerate(NULL, count, &count, extensions.data())))
+        return;
+    char line[400];
+    size_t used = 0;
+    unsigned lines = 0;
+    for (const XrExtensionProperties& extension : extensions) {
+        const size_t length = strlen(extension.extensionName);
+        if (used && used + length + 2 > 300) {
+            Log("OpenXR: the runtime offers: %s", line);
+            used = 0;
+            if (++lines >= 6)
+                return;
+        }
+        used += snprintf(line + used, sizeof(line) - used, "%s%s", used ? ", " : "", extension.extensionName);
+    }
+    if (used)
+        Log("OpenXR: the runtime offers: %s", line);
+}
 static bool HasExtension(const char* wanted)
 {
     PFN_xrEnumerateInstanceExtensionProperties enumerate = NULL;
@@ -458,8 +546,12 @@ bool XrRuntimeInit(float rawTangents[2][4], float eyeToHead[2][3][4])
     instanceInfo.applicationInfo.applicationVersion = 1;
     instanceInfo.applicationInfo.engineVersion = 1;
     instanceInfo.applicationInfo.apiVersion = XR_API_VERSION_1_0;
-    const char* extensions[] = {XR_KHR_D3D11_ENABLE_EXTENSION_NAME};
+    const char* extensions[2] = {XR_KHR_D3D11_ENABLE_EXTENSION_NAME};
     instanceInfo.enabledExtensionCount = 1;
+    LogExtensions();
+    const bool refreshRateOffered = ExtensionListed(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME); // (the headset's current refresh rate, and when it changes)
+    if (refreshRateOffered)
+        extensions[instanceInfo.enabledExtensionCount++] = XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME;
     instanceInfo.enabledExtensionNames = extensions;
     XrResult result = createInstance(&instanceInfo, &g_xr.instance);
     if (XR_FAILED(result)) {
@@ -472,6 +564,8 @@ bool XrRuntimeInit(float rawTangents[2][4], float eyeToHead[2][3][4])
         Abandon();
         return false;
     }
+    if (refreshRateOffered)
+        g_xr.getProc(g_xr.instance, "xrGetDisplayRefreshRateFB", (PFN_xrVoidFunction*)&g_xr.getDisplayRefreshRate);
     XrInstanceProperties instanceProperties = {XR_TYPE_INSTANCE_PROPERTIES};
     if (XR_SUCCEEDED(g_xr.fn.xrGetInstanceProperties(g_xr.instance, &instanceProperties)))
         Log("OpenXR: runtime %s %u.%u.%u", instanceProperties.runtimeName, (unsigned)XR_VERSION_MAJOR(instanceProperties.runtimeVersion),
@@ -605,7 +699,9 @@ bool XrRuntimeFocused()
 }
 double XrRuntimeRefreshHz()
 {
-    return g_xr.displayPeriod > 0 ? 1e9 / (double)g_xr.displayPeriod : 0.0;
+    if (g_xr.reportedHz > 0)
+        return g_xr.reportedHz; // (asked about once a second, so a change of the headset's refresh rate in its settings is followed)
+    return g_xr.refreshPeriod > 0 ? 1e9 / (double)g_xr.refreshPeriod : 0.0;
 }
 const char* XrRuntimeSessionState()
 {

@@ -10,6 +10,7 @@ namespace {
 
 const DWORD kPresentEveryMs = 500; // the message is presented this often (the window keeps what it was given in between)
 const wchar_t kMessage[] = L"Playing in VR";
+const wchar_t kHint[] = L"Click this window to use the keyboard and gamepad"; // (the game only reads them while its window has the focus)
 const int kLogoSource = 32; // the game's icon is 32 by 32
 
 IDirect3DSurface9* g_picture = NULL; // the message at the presented size: a default-pool surface in the back buffer's format
@@ -237,13 +238,38 @@ bool DesktopMessageBuildPicture(int width, int height, HICON logo, std::vector<u
     SIZE extent = {0, 0};
     const int length = (int)(sizeof(kMessage) / sizeof(kMessage[0]) - 1);
     GetTextExtentPoint32W(dc, kMessage, length, &extent);
+    // the hint under it: smaller, dimmer, as large as the window's width allows
+    const int hintLength = (int)(sizeof(kHint) / sizeof(kHint[0]) - 1);
+    int hintHeight = Clamp((int)(fontHeight * 0.42 + 0.5), 11, 30);
+    HFONT hintFont = NULL;
+    SIZE hintExtent = {0, 0};
+    for (;; hintHeight--) {
+        if (hintFont)
+            DeleteObject(hintFont);
+        hintFont = CreateFontW(-hintHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                               L"Segoe UI");
+        if (hintFont) {
+            HGDIOBJ before = SelectObject(dc, hintFont);
+            GetTextExtentPoint32W(dc, kHint, hintLength, &hintExtent);
+            SelectObject(dc, before);
+        }
+        if (!hintFont || hintExtent.cx <= width * 9 / 10 || hintHeight <= 9)
+            break;
+    }
     const int gap = logoSize ? fontHeight * 7 / 10 : 0;
-    const int top = (height - (logoSize + gap + (int)extent.cy)) / 2;
+    const int hintGap = fontHeight * 6 / 10;
+    const int top = (height - (logoSize + gap + (int)extent.cy + (hintFont ? hintGap + (int)hintExtent.cy : 0))) / 2;
     if (logoSize)
         DrawLogo(px, width, height, logo, (width - logoSize) / 2, top, logoSize);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(236, 241, 237));
     TextOutW(dc, (width - (int)extent.cx) / 2, top + logoSize + gap, kMessage, length);
+    if (hintFont) {
+        HGDIOBJ before = SelectObject(dc, hintFont);
+        SetTextColor(dc, RGB(160, 172, 164));
+        TextOutW(dc, (width - (int)hintExtent.cx) / 2, top + logoSize + gap + (int)extent.cy + hintGap, kHint, hintLength);
+        SelectObject(dc, before);
+    }
     GdiFlush();
     pixels.assign(px, px + (size_t)width * height);
     for (unsigned& p : pixels)
@@ -252,6 +278,8 @@ bool DesktopMessageBuildPicture(int width, int height, HICON logo, std::vector<u
         SelectObject(dc, oldFont);
     if (font)
         DeleteObject(font);
+    if (hintFont)
+        DeleteObject(hintFont);
     SelectObject(dc, oldBitmap);
     DeleteObject(bitmap);
     DeleteDC(dc);

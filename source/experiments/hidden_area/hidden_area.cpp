@@ -4,6 +4,7 @@
 #include "core.h"
 #include "d3d_hooks.h"
 #include "device_state.h"
+#include "openxr_runtime.h"
 #include "render_state.h"
 #include "vr_runtime.h"
 
@@ -37,25 +38,49 @@ static bool InMesh(const std::vector<HmdVector2_t>& mesh, float x, float y)
 
 static bool BuildMask()
 {
-    if (!g_vr.system)
+    const bool openXr = g_cfg.vrApi == kVrApiOpenXr;
+    if (!openXr && !g_vr.system)
         return false;
+    if (!openXr && fabs(g_cfg.fovScale - 1.0) > 1e-6) { // (OpenVR's mesh is in the picture of the runtime's own field of view: FovScale moves it)
+        Log("hidden-area cull: not with FovScale %.2f under OpenVR (the mesh is for the runtime's own field of view)", g_cfg.fovScale);
+        return false;
+    }
     for (int eye = 0; eye < 2; eye++) {
-        PFN_HiddenAreaMeshRaw getMesh = (PFN_HiddenAreaMeshRaw)(void*)g_vr.system->GetHiddenAreaMesh;
-        unsigned long long raw = getMesh((EVREye)eye, EHiddenAreaMeshType_k_eHiddenAreaMesh_Standard);
-        const HmdVector2_t* vertices = (const HmdVector2_t*)(uintptr_t)(unsigned)(raw & 0xFFFFFFFFull);
-        unsigned triangles = (unsigned)(raw >> 32);
-        if (!vertices || triangles == 0 || triangles > 10000) {
-            Log("hidden-area cull: SteamVR gave no hidden-area mesh for eye %d", eye);
-            return false;
+        std::vector<HmdVector2_t> mesh;
+        if (openXr) { // tangents on the z = -1 plane of the eye: the picture holds the tangents of the eye box, so u and v follow from them exactly
+            std::vector<float> xy;
+            if (!XrRuntimeHiddenAreaMesh(eye, xy)) {
+                Log("hidden-area cull: the runtime gave no hidden-area mesh for eye %d", eye);
+                return false;
+            }
+            const EyeBox& box = g_vr.eyeBox[eye];
+            const float width = (float)(box.right - box.left), height = (float)(box.up + box.down);
+            if (width <= 0 || height <= 0)
+                return false;
+            for (size_t k = 0; k + 1 < xy.size(); k += 2) {
+                HmdVector2_t p;
+                p.v[0] = (xy[k] - (float)box.left) / width;
+                p.v[1] = ((float)box.up - xy[k + 1]) / height;
+                mesh.push_back(p);
+            }
+        } else {
+            PFN_HiddenAreaMeshRaw getMesh = (PFN_HiddenAreaMeshRaw)(void*)g_vr.system->GetHiddenAreaMesh;
+            unsigned long long raw = getMesh((EVREye)eye, EHiddenAreaMeshType_k_eHiddenAreaMesh_Standard);
+            const HmdVector2_t* vertices = (const HmdVector2_t*)(uintptr_t)(unsigned)(raw & 0xFFFFFFFFull);
+            unsigned triangles = (unsigned)(raw >> 32);
+            if (!vertices || triangles == 0 || triangles > 10000) {
+                Log("hidden-area cull: SteamVR gave no hidden-area mesh for eye %d", eye);
+                return false;
+            }
+            mesh.assign(vertices, vertices + (size_t)triangles * 3);
         }
-        std::vector<HmdVector2_t> mesh(vertices, vertices + (size_t)triangles * 3);
-        // a cell is hidden when its centre is inside the mesh as given AND inside it turned upside down (the mesh is nearly symmetric, the
-        // convention for v is not certain: whatever the truth, only what is hidden either way is used)
+        // a cell is hidden when its centre is inside the mesh.  OpenVR's mesh: AND inside it turned upside down (the mesh is nearly symmetric, the
+        // convention for v is not certain: whatever the truth, only what is hidden either way is used).  OpenXR's is exact.
         std::vector<char> hidden((size_t)kGrid * kGrid, 0);
         for (int j = 0; j < kGrid; j++)
             for (int i = 0; i < kGrid; i++) {
                 float u = (i + 0.5f) / kGrid, v = (j + 0.5f) / kGrid;
-                hidden[(size_t)j * kGrid + i] = InMesh(mesh, u, v) && InMesh(mesh, u, 1.0f - v);
+                hidden[(size_t)j * kGrid + i] = InMesh(mesh, u, v) && (openXr || InMesh(mesh, u, 1.0f - v));
             }
         // erode by the margin: a hidden cell stays only if every cell within the margin is hidden too (outside the image counts as hidden)
         int margin = g_cfg.hiddenAreaMargin < 0 ? 0 : g_cfg.hiddenAreaMargin;
@@ -247,7 +272,8 @@ void HiddenAreaBeforeMainDraw(IDirect3DDevice9* device)
     if (g_stampFrame != g_vr.frameCount) { // once per frame at least, whatever the game does with its depth buffer
         g_stampFrame = g_vr.frameCount;
         g_pending = true;
-    }
+    } else if (g_cfg.hiddenAreaCull == 2)
+        return; // (mode 2: the first stamp of the frame only, the later depth clears are not followed)
     if (!g_pending)
         return;
     g_pending = false;

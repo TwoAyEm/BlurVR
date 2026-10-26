@@ -24,7 +24,8 @@ void XrRuntimeEyeToHead(int eye, float m[3][4]);
 bool XrRuntimeCovered();
 // True while the application has the focus.
 bool XrRuntimeFocused();
-// The refresh rate the runtime reports for its display, in Hz: the predicted display period of the last frame xrWaitFrame gave (0 until there is one).
+// The headset's refresh rate in Hz: what XR_FB_display_refresh_rate says, asked about once a second, when the runtime offers it; otherwise the predicted display period of the first
+// frame xrWaitFrame gave (0 until there is one).  Later periods are not used: SteamVR's follow the pace of the frames just submitted.
 double XrRuntimeRefreshHz();
 // The session's state as a word ("synchronized", "visible", "focused", ...), for logs.
 const char* XrRuntimeSessionState();

@@ -1,4 +1,4 @@
-// Hidden-area cull (experiment, [Render] HiddenAreaCull=1): the lenses never show about a quarter of each eye's flat image (the corners
+// Hidden-area cull ([Render] HiddenAreaCull: 1 = after every depth clear of the main target, 2 = once a frame; 0 = off): the lenses never show about a quarter of each eye's flat image (the corners
 // and the nose side; SteamVR's hidden-area mesh).  Before the main pass draws, those pixels get a depth that fails every later depth test of
 // the pass, so the geometry shaders do not run there.  The depth buffer is stamped lazily, once after each depth clear of the main target.
 //
