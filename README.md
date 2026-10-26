@@ -284,6 +284,11 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 
 - **New: `Reflections=0` (under `[VR]`) leaves the water's reflection out of races.** The game has a switch of its own for its reflection pass; BlurVR turns it off in races, so the game neither culls nor draws the pass, and the mod does not have to draw it twice. In a test on the LA River at 3584x2016 that saved 0.7 ms of a frame of 13 ms (about 5 frames a second). The menu showroom keeps its floor's reflection. `1` (the default) is the game's reflections as before. With `Log=1`, `BlurVR.log` has a `reflections:` line saying whether the game's switch was found.
 
+**FPS counter and the window on the desktop**
+
+- **The FPS counter's colours are right under OpenXR, and follow a change of the headset's refresh rate.** They were measured against a rate that jumped about: SteamVR's predicted display period follows the pace of the frames just submitted, it is not the refresh period. The counter now asks the runtime for the headset's refresh rate once a second (`XR_FB_display_refresh_rate`, which SteamVR offers; with a runtime that does not, the first display period it reports is used), so a change of the rate in SteamVR's settings shows within a second. With `Log=1`, `BlurVR.log` lists the extensions the runtime offers and, every five seconds, the display periods it reported.
+- **The window on the desktop says "Click this window to use the keyboard and gamepad"** (with `DesktopView=off`): the game only reads them while its window has the focus.
+
 **Other**
 
 - New host check in `source\tools`: `motion_blur_check.py` checks the motion blur (the matrix of each eye against a calculation, and the switch on a real Direct3D 9 device).
