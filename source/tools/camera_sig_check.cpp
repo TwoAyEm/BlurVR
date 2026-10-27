@@ -1,7 +1,10 @@
 // Runs the camera-function scan of src/game_signatures.cpp on a Blur.exe (or on a dump of the running module) and prints what it finds,
 // so a build can be looked at without starting the game.  Built and run by tools/camera_sig_check.py.
 //
-//     camera_sig_check <Blur.exe | dump.exe> [...]
+//     camera_sig_check [--call-sites] <Blur.exe | dump.exe> [...]
+//
+// --call-sites also runs the second way of finding SetCamera (through the calls to SetCameraData) on a build whose SetCamera the patterns found, and says
+// whether the two agree: the way a build with rewritten code is found, tried on one that is not.
 //
 // Sections are mapped as the file says (raw data at the section's virtual address), so a dump written with every section at its own
 // address in the file works the same as an ordinary executable.  An executable that is encrypted on disk shows as high entropy and
@@ -44,6 +47,8 @@ struct Section {
     unsigned va, virtualSize, flags;
     std::vector<unsigned char> bytes;
 };
+
+static bool g_callSites = false;
 
 static int Check(const char* path)
 {
@@ -101,7 +106,7 @@ static int Check(const char* path)
             continue;
         if (Entropy(s.bytes.data(), s.bytes.size() < (1u << 20) ? s.bytes.size() : (1u << 20)) > 7.5)
             encrypted = true;
-        ScanForGameCameraCode(s.bytes.data(), s.bytes.size(), scan);
+        ScanForGameCameraCode(s.bytes.data(), s.bytes.size(), scan, (unsigned long long)imageBase + s.va);
         ScanForAiHudCode(s.bytes.data(), s.bytes.size(), aiScan);
     }
     if (encrypted)
@@ -132,14 +137,33 @@ static int Check(const char* path)
     else
         printf("  AI HUD: not found (%s)\n", aiWhy);
     GameCameraCode code;
-    char why[256];
+    char why[768];
     if (!ResolveGameCameraCode(scan, code, why, sizeof(why))) {
         printf("  NOT RESOLVED: %s\n", why);
         return 1;
     }
-    printf("  RESOLVED: SetCameraData 0x%08x (%s pattern), SetCamera 0x%08x (%s pattern), camera description 0x%x bytes, hook bytes %zu and %zu\n",
-           va(code.setCameraData), code.dataForm ? "loose" : "tight", va(code.setCamera), code.cameraForm ? "loose" : "tight", (unsigned)code.cameraBytes,
+    const char* forms[3] = {"tight pattern", "loose pattern", "call sites"};
+    printf("  RESOLVED: SetCameraData 0x%08x (%s pattern), SetCamera 0x%08x (%s), camera description 0x%x bytes, hook bytes %zu and %zu\n", va(code.setCameraData),
+           code.dataForm ? "loose" : "tight", va(code.setCamera), forms[code.cameraForm < 0 || code.cameraForm > 2 ? 0 : code.cameraForm], (unsigned)code.cameraBytes,
            code.setCameraDataStolen, code.setCameraStolen);
+    if (code.cameraForm == 2)
+        printf("  SetCamera was %s\n", code.how);
+    if (code.cameraStub)
+        printf("  the hook rewrites %s at 0x%08x, which names the body 0x%08x\n", code.cameraStub == 1 ? "the table entry" : code.cameraStub == 2 ? "the jump" : "the push",
+               va(code.cameraOperand), code.cameraBody);
+    if (g_callSites && code.cameraForm != 2) {
+        GameCameraCode other;
+        char note[420];
+        bool ok = FindSetCameraThroughCallSites(scan, code.setCameraData, other, note, sizeof(note));
+        printf("  call-site search: %s%s\n", ok ? "" : "NOT FOUND: ", note);
+        if (ok && !other.cameraStub && va(other.setCamera) != va(code.setCamera))
+            printf("  call-site search DISAGREES: it names 0x%08x, the pattern 0x%08x\n", va(other.setCamera), va(code.setCamera));
+        else if (ok && other.cameraBytes != code.cameraBytes)
+            printf("  call-site search DISAGREES about the description: 0x%x bytes against 0x%x\n", (unsigned)other.cameraBytes, (unsigned)code.cameraBytes);
+        else if (ok)
+            printf("  call-site search agrees (description 0x%x bytes)\n", (unsigned)other.cameraBytes);
+        return ok ? 0 : 1;
+    }
     return 0;
 }
 
@@ -150,7 +174,12 @@ int main(int argc, char** argv)
         return 2;
     }
     int failures = 0;
-    for (int i = 1; i < argc; i++)
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--call-sites")) {
+            g_callSites = true;
+            continue;
+        }
         failures += Check(argv[i]);
+    }
     return failures ? 1 : 0;
 }

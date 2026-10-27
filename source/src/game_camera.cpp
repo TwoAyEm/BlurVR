@@ -631,23 +631,30 @@ void GameCameraPoll()
     DWORD imageSize = 0, timeStamp = 0;
     ScanModule(scan, imageSize, timeStamp);
     GameCameraCode code;
-    char why[256] = "";
+    char why[768] = "";
     if (!ResolveGameCameraCode(scan, code, why, sizeof(why))) {
         Log("game camera: Blur.exe image 0x%x bytes, PE time stamp 0x%08x: the camera code was not found (%s) [try %u of 5]; the game culls with its own frustum",
             (unsigned)imageSize, (unsigned)timeStamp, why, tries);
         return;
     }
-    BYTE expectedData[16], expectedCamera[16];
+    BYTE expectedData[16], expectedCamera[16] = {};
     memcpy(expectedData, code.setCameraData, code.setCameraDataStolen);
-    memcpy(expectedCamera, code.setCamera, code.setCameraStolen);
+    if (!code.cameraStub)
+        memcpy(expectedCamera, code.setCamera, code.setCameraStolen);
     tries = 5; // found: no more looking, whatever the hooks do
     g_cameraBytes = code.cameraBytes;
     g_origSetCameraData = (SetCameraDataFn)InstallInlineHook((void*)code.setCameraData, expectedData, code.setCameraDataStolen, (void*)H_SetCameraData);
-    g_origSetCamera = (SetCameraFn)InstallInlineHook((void*)code.setCamera, expectedCamera, code.setCameraStolen, (void*)H_SetCamera);
-    Log("game camera: Blur.exe image 0x%x bytes, PE time stamp 0x%08x: SetCameraData at %p (%s pattern) %s, SetCamera at %p (%s pattern, "
+    if (code.cameraStub) // (the game's calls reach SetCamera through a stub: its target is rewritten, the body is called as it is)
+        g_origSetCamera = (SetCameraFn)InstallStubHook(code.cameraStub, (BYTE*)code.cameraOperand, code.cameraBody, (void*)H_SetCamera);
+    else
+        g_origSetCamera = (SetCameraFn)InstallInlineHook((void*)code.setCamera, expectedCamera, code.setCameraStolen, (void*)H_SetCamera);
+    static const char* const formNames[3] = {"tight pattern", "loose pattern", "call sites"};
+    Log("game camera: Blur.exe image 0x%x bytes, PE time stamp 0x%08x: SetCameraData at %p (%s pattern) %s, SetCamera at %p (%s, "
         "description 0x%x bytes) %s",
         (unsigned)imageSize, (unsigned)timeStamp, code.setCameraData, code.dataForm ? "loose" : "tight", g_origSetCameraData ? "hooked" : "NOT HOOKED",
-        code.setCamera, code.cameraForm ? "loose" : "tight", (unsigned)code.cameraBytes, g_origSetCamera ? "hooked" : "NOT HOOKED");
+        code.setCamera, formNames[code.cameraForm < 0 || code.cameraForm > 2 ? 0 : code.cameraForm], (unsigned)code.cameraBytes, g_origSetCamera ? "hooked" : "NOT HOOKED");
+    if (code.cameraForm == 2)
+        Log("game camera: SetCamera was %s", code.how);
     if (g_origSetCameraData && g_origSetCamera)
         g_hooked = true;
     else if (g_origSetCameraData || g_origSetCamera) // one of the two only: the pairing breaks, undo nothing but never use half

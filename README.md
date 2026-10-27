@@ -1,4 +1,4 @@
-# BlurVR 1.7.1
+# BlurVR 1.7.1b
 
 **Seated VR for Blur (SteamVR / OpenVR, or OpenXR).**
 
@@ -233,10 +233,10 @@ The game decides what to draw from a view frustum around your head (both eyes' f
 
 BlurVR reaches the headset through SteamVR's OpenVR by default. Set `Api=openxr` under `[VR]` in `BlurVR.ini` to use OpenXR instead: the game then runs on the system's active OpenXR runtime (SteamVR's or another one). Without the line, or with `Api=openvr`, nothing changes.
 
-- **The runtime needs a 32-bit build.** Blur is a 32-bit program and sees only the OpenXR runtime that is registered for 32-bit programs: the `ActiveRuntime` value in `HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Khronos\OpenXR\1` has to point to a runtime `.json` whose library is a 32-bit DLL. SteamVR registers one from version 2.17 (answer yes when it asks whether to make SteamVR the default OpenXR runtime). Whether another runtime has a 32-bit build is for its maker to say. A 32-bit `.json` that is not the registered one can be given in `OpenXRRuntime` under `[VR]`. OpenXR support is new: it has been tried with SteamVR's OpenXR runtime and a Valve Index, where it looked the same as OpenVR; other runtimes and headsets have not been tried. Please send `BlurVR.log` with any problem.
+- **The runtime needs a 32-bit build.** Blur is a 32-bit program and sees only the OpenXR runtime that is registered for 32-bit programs: the `ActiveRuntime` value in `HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Khronos\OpenXR\1` has to point to a runtime `.json` whose library is a 32-bit DLL. SteamVR registers one from version 2.17 (answer yes when it asks whether to make SteamVR the default OpenXR runtime). Whether another runtime has a 32-bit build is for its maker to say. A 32-bit `.json` that is not the registered one can be given in `OpenXRRuntime` under `[VR]`. OpenXR support is new: it has been tried with SteamVR's OpenXR runtime and a Valve Index, where it looked the same as OpenVR, and with Virtual Desktop's OpenXR runtime and a Pico 4 (see Runtimes below); other runtimes and headsets have not been tried. Please send `BlurVR.log` with any problem.
 - **If OpenXR cannot start** (no 32-bit runtime, no headset, a failed session) the game stays on the monitor and `BlurVR.log` (with `Log=1`) says why, in lines that start with `OpenXR:`. BlurVR does not switch to SteamVR's OpenVR by itself; set `Api=openvr` for that.
 - **What is the same:** races, the HUD, the mirror, the markers, the settings and the keys. **What differs:** the recentre key (F9, and the recentre at the start of every race) is BlurVR's own, because OpenXR has no way to ask the runtime to recentre (a recentre done in the runtime itself is followed too), and the floating menu screen is an OpenXR quad layer instead of a SteamVR overlay.
-- **Runtimes:** tested with SteamVR's OpenXR runtime; users have reported that it works with Virtual Desktop's OpenXR runtime too.
+- **Runtimes:** tried with SteamVR's OpenXR runtime on a Valve Index, and with Virtual Desktop's OpenXR runtime (VDXR) on a Pico 4 streamed from a PC with a Radeon RX 7600. Virtual Desktop's streamer folder has a 32-bit runtime file, `OpenXR\virtualdesktop-openxr-32.json`, and that run gave its path in `OpenXRRuntime` under `[VR]`. On the Pico 4 the menus and races ran, and with `MotionBlur=0` and `Reflections=0` a race held the headset's 72 frames a second at 3024x1680 (`SharedTransport` on). The game crashed there when a race ended and the showroom was about to load, until `Blur.exe` was patched to use more than 2 GB of memory (a "[4 GB patch](https://ntcore.com/4gb-patch/)", large address aware); after that two races in a row, the way back to the showroom and the exit went through cleanly.
 - `openxr_loader.dll` in the `BlurVR` folder is the 32-bit OpenXR loader of the Khronos Group (see `LICENSE_openxr.txt`).
 
 ## How it works
@@ -272,6 +272,13 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **To run the game flat,** set `Stereo=0` (SteamVR is not used; the `[Display]` and `[Input]` settings still apply), or `Enabled=0` (the mod does nothing), or run `uninstall.bat`.
 
 ## What is new
+
+### Version 1.7.1b
+
+**Other builds of the game**
+
+- **A build whose code was rewritten gets the head frustum too.** Some non-Steam builds of the game have a few percent of their functions moved and rewritten (the function's address holds a jump to a copy with extra instructions in it). On one such build, from a user's log, BlurVR found the game's `SetCameraData` by its bytes but not `SetCamera`, so the game kept culling with its own frustum (`the camera code was not found` in `BlurVR.log`). BlurVR now also looks for `SetCamera` through the calls to `SetCameraData` and, when it finds it behind a jump, hooks the jump instead of the function; the function is checked against its instructions before anything is changed. This was tried on test builds made for it and has not been seen yet on that user's build. Builds that worked before are found as before.
+- **When the camera code is still not found, the `game camera:` line says what was seen:** which calls were looked at and the first bytes of the function there. That line and the whole `BlurVR.log` are what to send.
 
 ### Version 1.7.1
 

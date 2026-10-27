@@ -35,6 +35,27 @@ void* InstallInlineHook(void* target, const BYTE* expected, size_t length, void*
     return tramp;
 }
 
+void* InstallStubHook(int kind, BYTE* operand, unsigned body, void* hook)
+{
+    if (kind < 1 || kind > 3)
+        return NULL;
+    unsigned current;
+    memcpy(&current, operand, 4);
+    const unsigned named = kind == 2 ? (unsigned)(uintptr_t)(operand + 4) + current : current;
+    if (named != body) {
+        Log("stub hook: the operand at %p names %08x, not the expected %08x, not hooked", operand, named, body);
+        return NULL;
+    }
+    const unsigned value = kind == 2 ? (unsigned)((BYTE*)hook - (operand + 4)) : (unsigned)(uintptr_t)hook;
+    DWORD old = 0;
+    if (!VirtualProtect(operand, 4, PAGE_EXECUTE_READWRITE, &old))
+        return NULL;
+    memcpy(operand, &value, 4);
+    VirtualProtect(operand, 4, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), operand, 4);
+    return (void*)(uintptr_t)body;
+}
+
 bool PatchImport(HMODULE module, const char* dll, const char* name, void* hook, void** original)
 {
     BYTE* base = (BYTE*)module;

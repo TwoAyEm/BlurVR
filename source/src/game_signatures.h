@@ -5,11 +5,19 @@
 
 // What a scan of the executable sections has found so far.  Feed every executable section to ScanForGameCameraCode, then ask
 // ResolveGameCameraCode.
+enum { kMaxScanBlocks = 8 };
 struct GameCameraScan {
     // [function][form]: function 0 = SetCameraData, 1 = SetCamera; form 0 = tight (only call targets and absolute addresses are
     // wildcards), 1 = loose (every displacement and immediate is a wildcard too)
     unsigned count[2][2];
     const unsigned char* first[2][2];
+    // The blocks that were searched, kept for the second way of finding SetCamera (through the calls to SetCameraData, below).
+    struct Block {
+        const unsigned char* code;
+        size_t size;
+        unsigned long long va; // the address the block has in the game's memory (in a file read by a tool that is not where `code` points)
+    } blocks[kMaxScanBlocks];
+    unsigned blockCount;
 };
 
 // The two functions, once found.  Both are __thiscall members of the render view class: SetCameraData(view, T) and
@@ -19,15 +27,25 @@ struct GameCameraCode {
     const unsigned char* setCamera;
     size_t setCameraDataStolen, setCameraStolen; // whole instructions at the start of each function, without relative operands, for the hook
     size_t cameraBytes;                          // size of the camera description SetCamera copies, read from its code
-    int dataForm, cameraForm;                    // 0 = tight pattern, 1 = loose pattern
+    int dataForm, cameraForm;                    // 0 = tight pattern, 1 = loose pattern, 2 = found through the calls to SetCameraData
+    // cameraForm 2 only.  A build whose code was obfuscated can have moved SetCamera's body elsewhere and left a jump stub at its address, which is what the
+    // game's calls go through; the hook then rewrites the stub's target and leaves the stub alone (setCameraStolen is 0 and `setCamera` is the stub).
+    int cameraStub;                              // 0 = SetCamera itself is there (hooked at its start), 1 = jmp [slot] (the slot is rewritten), 2 = jmp rel32, 3 = push imm32 / ret
+    const unsigned char* cameraOperand;          // cameraStub != 0: the 4 bytes that name where the stub goes (the slot's value, the rel32, the imm32)
+    unsigned cameraBody;                         // cameraStub != 0: the address they name now, which is the function's body
+    char how[200];                               // cameraForm 2: a line for the log saying what was found
 };
 
 void InitGameCameraScan(GameCameraScan& scan);
-// Search one block of code.  Matches are counted over all blocks.
-void ScanForGameCameraCode(const unsigned char* code, size_t size, GameCameraScan& scan);
-// Both functions found exactly once (a tight match counts when the loose pattern also matched elsewhere)?  When not, `why` says what
-// was seen for each of them.
+// Search one block of code (`va` = where it is in the game's memory when that is not `code`).  Matches are counted over all blocks.
+void ScanForGameCameraCode(const unsigned char* code, size_t size, GameCameraScan& scan, unsigned long long va = 0);
+// Both functions found exactly once (a tight match counts when the loose pattern also matched elsewhere)?  When SetCameraData is found and SetCamera is not
+// (a build that rewrote the function), SetCamera is looked for through the calls to SetCameraData: the function the code around those calls calls too.
+// When not found, `why` says what was seen for each of them.
 bool ResolveGameCameraCode(const GameCameraScan& scan, GameCameraCode& out, char* why, size_t whySize);
+// That second way on its own (ResolveGameCameraCode uses it by itself; a tool can ask for it on a build whose SetCamera was found by its bytes, to compare).
+// `setCameraData` is the function found by the scan; `note` says what it saw.
+bool FindSetCameraThroughCallSites(const GameCameraScan& scan, const unsigned char* setCameraData, GameCameraCode& out, char* note, size_t noteSize);
 
 // The AI HUD gadget's per-frame function (UIAiHud, NOTES.md section 26): a __thiscall member without arguments that places each AI car's marker in
 // the world.  One pattern (call targets are the only wildcards); the function is used when it matches exactly once.

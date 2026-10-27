@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Run the camera-function scan of src/game_signatures.cpp (the code the proxy uses to find the game's camera hand-over) on Blur.exe files.
 
-    python tools/camera_sig_check.py <Blur.exe or dump.exe> [more files]
+    python tools/camera_sig_check.py [--call-sites] <Blur.exe or dump.exe> [more files]
 
 Prints, for each file: size, PE time stamp, sections, how often each pattern matches and, when both functions are found exactly once,
-their addresses.  Exit code 1 when any file is not resolved.  A dump of the running module (every section at its own address in the file)
+their addresses.  When SetCamera is not found by its bytes it is looked for through the calls to SetCameraData (a build with rewritten code),
+and the output says so; --call-sites runs that search on a build whose SetCamera was found by its bytes, to compare.  Exit code 1 when any file is not resolved.  A dump of the running module (every section at its own address in the file)
 works like an executable; an executable that is encrypted on disk is reported as such and has to be dumped from the running game.
 Needs Python with `pip install ziglang`.
 """
