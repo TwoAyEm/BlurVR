@@ -1,4 +1,4 @@
-# BlurVR 1.7
+# BlurVR 1.7.1
 
 **Seated VR for Blur (SteamVR / OpenVR, or OpenXR).**
 
@@ -9,7 +9,7 @@ Play Blur in a headset, seated. Built and tested with a Valve Index; any SteamVR
 
 [Watch the video](https://www.youtube.com/watch?v=-Gwqe6Wcjd8) · [Download the latest release](https://github.com/TwoAyEm/BlurVR/releases)
 
-**Contents:** [What it does](#what-it-does) · [Requirements](#requirements) · [Install](#install) · [Resolution](#resolution) · [Keys](#keys) · [Settings](#settings) · [OpenXR](#openxr-optional) · [How it works](#how-it-works) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting) · [What is new](#what-is-new) · [License](#license)
+**Contents:** [What it does](#what-it-does) · [Requirements](#requirements) · [Install](#install) · [Resolution](#resolution) · [Graphics quality](#graphics-quality) · [Keys](#keys) · [Settings](#settings) · [OpenXR](#openxr-optional) · [How it works](#how-it-works) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting) · [What is new](#what-is-new) · [License](#license)
 
 ## What it does
 
@@ -65,6 +65,10 @@ In VR, BlurVR replaces the game's resolution list (the monitor's 16:9 and 4:3 mo
 Your monitor has no such mode, so the game runs in a window (a window larger than your screens is normal); only the headset sees the picture. Bigger is sharper but heavier: start with the Vive-sized entry and go up while it stays smooth.
 
 In VR the size is kept in `BlurVR.ini` (`[VR] Resolution=WxH`): the game starts at it, even when Windows cannot make a window that big, and a size you pick in the game's video options is written there. The game's own settings (`settings.xml`) keep the size of the flat game, so with `Stereo=0` or `Enabled=0` it starts at your normal resolution again. BlurVR puts the flat size back when the game exits (and at the next start if the game was killed); the untouched file is copied to `settings.xml.blurvr-backup` beside it, and `BlurVR\display_backup.ini` holds the flat size.
+
+## Graphics quality
+
+**Use the game's own quality setting** (the video options in the game's menus) to trade picture quality for frame rate. It adjusts the reflections and the shadows, among other things, for the whole picture and without any help from BlurVR; on the lowest level a Valve Index held 90 frames a second at 3584x2016 in a race. BlurVR's own switches for single effects (`Reflections` under `[VR]`, and `NoLensFlare`) do part of the same job: they are kept for now, but the game's own setting is the preferred way and they may be removed in a later version.
 
 ## Keys
 
@@ -148,7 +152,7 @@ Blur counts how long a key is held in frames and, after a second, repeats it eve
 | `Bloom` | `100` | Strength of the game's glow around its menus, UI and loading screens, in percent (0 = none, 200 = double) |
 | `NoLensFlare` | `0` | 1 = drop the flare sprites and the glow around lights |
 | `MotionBlur` | `1` | 0 = no motion blur: a sharper picture, but **no real gain in frame rate** (the blur is about 0.1 ms of a 13 ms frame, measured with a Valve Index), so turn it off for the look, not for speed. The game's blur pass then writes the picture without blur (one texture read a pixel instead of the blur's many). 1 = the game's own motion blur, drawn for each eye. |
-| `Reflections` | `1` | 0 = leave the game's reflection pass out in races: the water then shows no reflection (it looks fine without it). BlurVR turns off the game's own switch for it (a tweakable the game tests before it culls or draws anything for the pass), so the game does none of that work for it: in a test on the LA River at 3584x2016 that took 0.7 ms off a frame of 13 ms (about 76 to 81 frames a second). The menu showroom keeps its floor's reflection. If the game's switch is not found in your build, the pass's draw calls are left out instead, which saves less. 1 = the game's own reflections. |
+| `Reflections` | `1` | **Prefer the game's own quality setting (see [Graphics quality](#graphics-quality)); this switch may be removed later.** 0 = leave the game's reflection pass out in races: the water then shows no reflection (it looks fine without it). BlurVR turns off the game's own switch for it (a tweakable the game tests before it culls or draws anything for the pass), so the game does none of that work for it: in a test on the LA River at 3584x2016 that took 0.7 ms off a frame of 13 ms (about 76 to 81 frames a second). The menu showroom keeps its floor's reflection. If the game's switch is not found in your build, the pass's draw calls are left out instead, which saves less. 1 = the game's own reflections. |
 | `SharedTransport` | `1` | Run the game on a Direct3D 9Ex device and hand each finished race frame to SteamVR on the GPU instead of copying it through the CPU (saves several ms a frame, most at large sizes). On by default; it falls back to the CPU copy by itself when it cannot work. Set 0 if textures look wrong or the picture is black |
 | `DesktopView` | `off` | What the window on the desktop shows: `off` = no picture of the game at all: the window says "Playing in VR" with the game's logo and a reminder to click the window for the keyboard and gamepad (also in the menus and while loading), and is painted twice a second, which saves the GPU the copy of the game's picture. `left` = the left eye's view in a race (cropped to the window's shape and drawn at the window's own size, which is cheap), `right` = the right eye's, `both` = the whole side-by-side picture. The headset's picture is not affected. `off` needs a windowed game without multisampling (otherwise the window shows the left eye's view). Before 1.5 the default was `left`. |
 | `DesktopPresentEvery` | `1` | In a race, the window on the desktop (a mirror of the headset) really updates only every n-th frame (2-4 saves a little GPU time; 1 = every frame) |
@@ -263,11 +267,21 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **Nothing happens / the game is flat:** start SteamVR first; run `uninstall.bat` to go back to the plain game. With `Api=openxr` start the OpenXR runtime instead and read the `OpenXR:` lines in `BlurVR.log` (set `Log=1`): they say whether a 32-bit runtime was found, whether it sees a headset and how far the start got (see [OpenXR](#openxr-optional)).
 - **Something looks wrong in the headset:** press **Num8** while it is on screen. BlurVR saves `BlurVR_dump_<time>_picture_*.bmp` (the whole side-by-side picture, large files) and one file per HUD layer in the BlurVR folder: attach them to the report.
 - **Bug reports** should also include `BlurVR.log`: set `Log=1` under `[General]`, reproduce the problem, close the game, and send `BlurVR\BlurVR.log`.
-- **Slow:** lower `Resolution` under `[VR]`, or set `Reflections=0` there. **Num7** (or `Enabled=1` under `[Perf]`, with `Log=1`) writes timing lines to the log.
+- **Slow:** lower the game's own quality setting first (see [Graphics quality](#graphics-quality)), then `Resolution` under `[VR]`. **Num7** (or `Enabled=1` under `[Perf]`, with `Log=1`) writes timing lines to the log.
 - **Odd textures or a black picture:** if `SharedTransport` (on by default in VR) gives these on your graphics card, add `SharedTransport=0` under `[VR]`.
 - **To run the game flat,** set `Stereo=0` (SteamVR is not used; the `[Display]` and `[Input]` settings still apply), or `Enabled=0` (the mod does nothing), or run `uninstall.bat`.
 
 ## What is new
+
+### Version 1.7.1
+
+**Rear-view mirror**
+
+- **The 3D rear-view mirror is in stereo at every quality level of the game.** At the lowest quality the game draws its UI, the mirror's picture included, before the scene of the frame, and BlurVR did not recognise the mirror's picture then: the mirror scene was still drawn once for each eye, but each eye's mirror showed both halves side by side. It is now picked up whichever order the game draws in.
+
+**Graphics quality**
+
+- **The game's own quality setting is the preferred way to trade picture quality for frame rate** (see [Graphics quality](#graphics-quality)): it adjusts the reflections and the shadows, among other things, and a Valve Index held 90 frames a second at 3584x2016 on its lowest level. `Reflections` and `NoLensFlare` under `[VR]` are kept for now but may be removed in a later version.
 
 ### Version 1.7
 
@@ -282,7 +296,7 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 
 **Frame rate**
 
-- **New: `Reflections=0` (under `[VR]`) leaves the water's reflection out of races.** The game has a switch of its own for its reflection pass; BlurVR turns it off in races, so the game neither culls nor draws the pass, and the mod does not have to draw it twice. In a test on the LA River at 3584x2016 that saved 0.7 ms of a frame of 13 ms (about 5 frames a second). The menu showroom keeps its floor's reflection. `1` (the default) is the game's reflections as before. With `Log=1`, `BlurVR.log` has a `reflections:` line saying whether the game's switch was found.
+- **New: `Reflections=0` (under `[VR]`) leaves the water's reflection out of races** (the game's own quality setting does this and more, and is the preferred way; this switch may be removed later). The game has a switch of its own for its reflection pass; BlurVR turns it off in races, so the game neither culls nor draws the pass, and the mod does not have to draw it twice. In a test on the LA River at 3584x2016 that saved 0.7 ms of a frame of 13 ms (about 5 frames a second). The menu showroom keeps its floor's reflection. `1` (the default) is the game's reflections as before. With `Log=1`, `BlurVR.log` has a `reflections:` line saying whether the game's switch was found.
 
 **FPS counter and the window on the desktop**
 

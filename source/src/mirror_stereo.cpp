@@ -32,6 +32,11 @@ void NoteMainCameraAxes()
     g_mainCamera.valid = g_lastCameraAxes.valid;
 }
 
+bool MirrorSceneRecent()
+{
+    return g_mirrorSceneFrame != ~0ull && g_vr.frameCount >= g_mirrorSceneFrame && g_vr.frameCount - g_mirrorSceneFrame <= 2;
+}
+
 bool IsMirrorScenePass()
 {
     if (!g_cfg.mirror3d || !g_cfg.stereo || !g_cfg.hudWorldLocked || !g_vr.active || !g_matrixLayout || !g_rtHeight ||
@@ -153,7 +158,7 @@ void ReleaseMirrorStereo()
 
 bool PrepareMirrorEyeTextures(IDirect3DDevice9* device, IDirect3DBaseTexture9* mirrorBase)
 {
-    if (!mirrorBase || mirrorBase->GetType() != D3DRTYPE_TEXTURE || g_mirrorSceneFrame != g_vr.frameCount)
+    if (!mirrorBase || mirrorBase->GetType() != D3DRTYPE_TEXTURE || !MirrorSceneRecent())
         return false;
     if (g_mirrorCopyFrame == g_vr.frameCount)
         return g_mirrorCopyOk;

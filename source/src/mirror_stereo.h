@@ -9,6 +9,8 @@
 void NoteMainCameraAxes();
 // Is the current draw a 3D draw into the mirror render target?
 bool IsMirrorScenePass();
+// The mirror scene was drawn in stereo this frame or one of the last two (the mirror's UI draw may come before the scene in a frame: the lowest quality of the game composes its UI first).
+bool MirrorSceneRecent();
 // Run that draw once per eye.
 HRESULT DrawMirrorSceneStereo(IDirect3DDevice9* device, const DrawCall& draw);
 // Copy the two eye halves of the mirror texture into the per-eye textures (once per frame).  False when the mirror

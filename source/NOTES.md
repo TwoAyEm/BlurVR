@@ -377,7 +377,7 @@ where `ReadIniInt(..., oldSection)` says so: Stereo, ForceNoVSync, SharedTranspo
 `[Display]` (VR and flat) ForceNoVSync (0; in VR V-Sync is always off, the headset paces the game).
 `[Input]` (VR and flat) KeyRepeatMs (60 ms; 0 = off): menu key repeat limiter, `input_limiter.cpp` (section 19).
 `[VR]` (ignored when flat) Api (`openvr`, the default, or `openxr`, section 27), OpenXRRuntime (the .json of an OpenXR runtime, empty = the system's active one), Resolution (WxH, 2160x1200; `CustomWidth`/`CustomHeight` of `[Render]` are read when it is missing), Bloom (100 %: the game's glow around
-menus, UI and loading screens; 0 = none), NoLensFlare (0; 1 drops the flare sprites and the bloom/glow around lights), MotionBlur (1; 0 = the blur pass copies the picture, section 5), Reflections (1; 0 = the game's reflection pass is switched off in races, section 13), SharedTransport (1, section 15),
+menus, UI and loading screens; 0 = none), NoLensFlare (0; 1 drops the flare sprites and the bloom/glow around lights), MotionBlur (1; 0 = the blur pass copies the picture, section 5), Reflections (1; 0 = the game's reflection pass is switched off in races, section 13; superseded by the game's own quality setting, may be removed), SharedTransport (1, section 15),
 DesktopView (off; left / right / both; 1 / 2 / 0 / 3 still read, section 20), DesktopPresentEvery (1, section 18), FitDesktopWindow (1), FpsCounter (0, section 28).
 `[Tracking]` Rotation, Position, PositionScale (game units per metre), IpdScale.
 `[Render]` (VR only) FovScale, SeamGutter (0); undocumented tuning: MainPassMinWidthFraction (0.9), RequireDepthBuffer, HalfResPasses, ReflectionLookupFix,
@@ -405,7 +405,10 @@ disparity (nearer pops out of the panel, farther recedes). When the UI draw of t
 (`g_drawIsMirror`), `PrepareMirrorEyeTextures` stretches each half into its own full-size texture and the draw is run
 twice, into the per-eye layers `g_mirrorSurface[eye]`; `ComposeHudLayers` draws each eye's layer on the HUD panel
 (same place and distance as the UI). If the rear camera cannot be recovered the picture stays mono (log line
-"rear camera not recovered"). The game flips the picture in the UI draw, not in its projection.
+"rear camera not recovered").  **Lowest quality of the game (2026-10-27):** the game composes its UI, the mirror's picture included, into an off-screen picture the size of the main one *before* the frame's scene draws, so
+the UI draw of the mirror came when `g_sceneDrawsThisFrame` was still 0 and was not recognised (the guard of the mirror test in `ClassifyDraw`), while the mirror scene pass was still drawn in stereo: each eye's mirror
+showed both halves side by side (the dump: `mirror 0/0`; the log, `a draw samples the mirror's 1632x256 render target texture (slot 1): classified as plan 2 ... scene draws this frame 0 ... mirror eye textures not made`).  The test now
+also accepts the draw when the mirror scene was drawn in stereo this frame or one of the last two (`MirrorSceneRecent`), and `PrepareMirrorEyeTextures` takes the same.  Confirmed in the headset at every quality level of the game (user, 2026-10-27); the diagnostics that found it (the sizes of the render target textures, of the scene targets, the draws that sample the mirror's texture) were taken out again. The game flips the picture in the UI draw, not in its projection.
 
 Known limits:
 
@@ -495,6 +498,7 @@ callback type; each module header lists what the module exports (with one-line c
 
 ## 13. Measuring before foveating: the timing probe and the lens analysis
 
+**The game's own quality setting is the preferred way to manage graphics (user, 2026-10-26).**  After the experiments below (reflections, shadows, the cube map, motion blur, the hidden-area cull) the user tried the game's video quality options, which adjust the reflections and the shadows among other things, and the lowest level held 90 fps at 3584x2016: what the experiments found by hand (the reflection pass was the one thing that paid) the game already offers, for every effect at once.  So the README sends users there first (section "Graphics quality") and calls `[VR] Reflections` (and `NoLensFlare`) superseded: they stay in the code and the ini for now and may be removed later; no new switch for a single effect should be added.  What the lowest quality does to the picture is not known in detail (the rear-view mirror was not in stereo at that level until 2026-10-27, section 10).
 Both only write `BlurVR.log`; neither changes the picture.
 
 **Timing probe** (`perf_probe.cpp`; `[Perf] Enabled=1`, or Num7 in game to switch it on and off). Once a second, while a race is

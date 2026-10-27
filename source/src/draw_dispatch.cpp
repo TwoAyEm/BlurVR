@@ -246,13 +246,14 @@ static int ClassifyDraw(IDirect3DDevice9* device)
     }
     // HUD: draws to the back buffer, after the 3D scene, that do not read a render-target texture
     // Rear-view mirror: a wide, short render-target texture (e.g. 864x160) composited into the main image
-    if (g_cfg.stereo && g_sceneDrawsThisFrame > 0 && IsMainSizedTarget() &&
+    // (the lowest quality of the game draws its UI, the mirror's picture included, before the scene of the frame: no scene draw yet, but the mirror scene is recent)
+    if (g_cfg.stereo && (g_sceneDrawsThisFrame > 0 || MirrorSceneRecent()) && IsMainSizedTarget() &&
         (!g_currentVsInfo || g_currentVsInfo->tracked.empty()) && strcmp(g_currentLevel, "showroom") != 0) { // (no mirror in the menu)
         for (int slot = 0; slot < 8; slot++) {
             IDirect3DBaseTexture9* boundTexture = g_boundTextures[slot];
             if (boundTexture && g_renderTargetTextures.count((void*)boundTexture) &&
                 boundTexture->GetType() == D3DRTYPE_TEXTURE) {
-                D3DSURFACE_DESC surfaceDesc;
+                D3DSURFACE_DESC surfaceDesc = {};
                 if (SUCCEEDED(((IDirect3DTexture9*)boundTexture)->GetLevelDesc(0, &surfaceDesc)) &&
                     surfaceDesc.Height >= 64 && surfaceDesc.Width >= 300 &&
                     (double)surfaceDesc.Width / surfaceDesc.Height > 3.0 &&
