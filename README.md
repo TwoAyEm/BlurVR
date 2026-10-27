@@ -1,4 +1,4 @@
-# BlurVR 1.7.1b
+# BlurVR 1.7.1c
 
 **Seated VR for Blur (SteamVR / OpenVR, or OpenXR).**
 
@@ -272,6 +272,12 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **To run the game flat,** set `Stereo=0` (SteamVR is not used; the `[Display]` and `[Input]` settings still apply), or `Enabled=0` (the mod does nothing), or run `uninstall.bat`.
 
 ## What is new
+
+### Version 1.7.1c
+
+**Other builds of the game**
+
+- **The head frustum now works on the 1.0 build of the game with rewritten code.** 1.7.1b found the game's `SetCamera` on that build through the calls to `SetCameraData`, but then refused it: the code had moved the load of the size of the camera description out of line (a jump to a block that loads it and jumps back), and the check did not follow the jump. It does now. Checked on that build's `Blur.exe` with `tools/camera_sig_check.py`; not yet seen in the game.
 
 ### Version 1.7.1b
 

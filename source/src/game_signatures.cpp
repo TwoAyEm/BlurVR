@@ -276,12 +276,24 @@ bool LooksLikeSetCamera(const GameCameraScan& scan, const unsigned char* body, s
         }
     }
     failedStep = kSetCameraStepCount;
+    unsigned long long bodyVa = 0;
+    VaOf(scan, body, bodyVa);
     for (size_t at = end[3]; at + 5 <= start[4]; at++) {
+        // the load of the size: mov ecx,imm32, the same from a table, or either of them in a block the code jumps to and back from (the load was moved out of line)
+        const unsigned char* load = body + at;
+        size_t room = start[4] - at;
+        if (body[at] == 0xE9 && bodyVa) {
+            const unsigned char* away = BytesAt(scan, (unsigned)(bodyVa + at + 5) + ReadU32(body + at + 1), 16);
+            if (!away)
+                continue;
+            load = away;
+            room = 16;
+        }
         unsigned dwords = 0;
-        if (body[at] == 0xB9) {
-            dwords = ReadU32(body + at + 1);
-        } else if (body[at] == 0x8B && body[at + 1] == 0x0D && at + 6 <= start[4]) { // the constant loaded from a table
-            const unsigned char* entry = BytesAt(scan, ReadU32(body + at + 2), 4);
+        if (load[0] == 0xB9 && room >= 5) {
+            dwords = ReadU32(load + 1);
+        } else if (load[0] == 0x8B && load[1] == 0x0D && room >= 6) { // the constant loaded from a table
+            const unsigned char* entry = BytesAt(scan, ReadU32(load + 2), 4);
             if (entry)
                 dwords = ReadU32(entry);
         }
