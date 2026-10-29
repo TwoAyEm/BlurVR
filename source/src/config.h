@@ -75,6 +75,10 @@ struct Config {
     int desktopView = kDesktopViewOff; // [VR] DesktopView (default off since 1.5): what the window on the desktop shows in a race: 1 = the left eye's view, 2 = the right eye's, 0 = the whole side-by-side picture, kDesktopViewOff = "Playing in VR" and the game's logo (desktop_message.cpp)
     int desktopPresentEvery = 1; // [Render] DesktopPresentEvery: in a race the game's window gets a real Present only every this many frames (1 = every frame as the game wants)
     double cullMarginDeg = 6.0, cullPullBack = 0.3; // [Culling] MarginDeg (added to every side) and PullBack (metres the frustum's apex is moved back) of the frustum around the head that the game culls with in VR, game_camera.cpp
+    int fanMaxLevel = 99;                          // [Fans] MaxLevel: the highest fan status level (fan_levels.cpp); 25 or less leaves the game's own table
+    int fanTraceScripts = 0;                        // [Fans] TraceScripts (needs Log=1): log the calls the game's scripts make to its rank and unlock functions (debugging)
+    int fanHideRankUnlock = 1;                      // [Fans] HideRankUnlock: 1 = a level above 25 adds no unlock entry and sets no "ranked up" flag, so the unlock screen is not shown for it (NOTES section 30)
+    int fanFirstStep = 13300, fanStepGrowth = 1000; // [Fans] FirstStep / StepGrowth: fans from level 25 to 26, and how much more each following level needs than the one before
     int foveationReport = 1; // [Foveation] Report: at VR start, log how much of each eye's image the lenses can show (lens_model.cpp)
 };
 

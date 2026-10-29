@@ -168,6 +168,17 @@ void LoadConfig()
     ReadIniString("VR", "OpenXRRuntime", "", g_cfg.openxrRuntime, sizeof(g_cfg.openxrRuntime));
     g_cfg.fitDesktopWindow = ReadIniInt("VR", "FitDesktopWindow", 1, "Render");
     g_cfg.foveationReport = ReadIniInt("Foveation", "Report", 1);
+    g_cfg.fanMaxLevel = ReadIniInt("Fans", "MaxLevel", 99);
+    g_cfg.fanTraceScripts = ReadIniInt("Fans", "TraceScripts", 0);
+    g_cfg.fanHideRankUnlock = ReadIniInt("Fans", "HideRankUnlock", 1);
+    g_cfg.fanFirstStep = ReadIniInt("Fans", "FirstStep", 13300);
+    g_cfg.fanStepGrowth = ReadIniInt("Fans", "StepGrowth", 1000);
+    if (g_cfg.fanMaxLevel > 999)
+        g_cfg.fanMaxLevel = 999;
+    if (g_cfg.fanFirstStep < 1)
+        g_cfg.fanFirstStep = 1;
+    if (g_cfg.fanStepGrowth < 0)
+        g_cfg.fanStepGrowth = 0;
     g_cfg.cullMarginDeg = ReadIniDouble("Culling", "MarginDeg", 6.0);
     g_cfg.cullPullBack = ReadIniDouble("Culling", "PullBack", 0.3);
     char buf[32];

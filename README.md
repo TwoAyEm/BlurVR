@@ -223,6 +223,14 @@ The game decides what to draw from a view frustum around your head (both eyes' f
 |---|---|---|
 | `Enabled` | `0` | 1 = write timing lines to the log once a second while racing (needs `Log=1`) |
 
+### `[Fans]`
+
+| Key | Default | What it does |
+|---|---|---|
+| `MaxLevel` | `99` | The fan status goes up to this level (the game stops at 25). 25 or less keeps the game's own table. Levels above 25 have no unlocks. Works flat and in VR |
+| `FirstStep` | `13300` | Fans needed to go from level 25 (170,300) to level 26 |
+| `StepGrowth` | `1000` | How many more fans each following level needs than the one before. With the defaults level 99 needs about 3.86 million fans |
+
 ### `[Foveation]`
 
 | Key | Default | What it does |
