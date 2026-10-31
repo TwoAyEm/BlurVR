@@ -6,6 +6,8 @@
 
 // Called once per presented frame (from H_Present).  Installs the hook the first time, when the VR half runs and the function is found in this Blur.exe.
 void AiHudPoll();
+// The start of the game's UIAiHud update (0 until it was found; the bytes there are the mod's own jump once it is hooked, those further in are the game's).
+const unsigned char* AiHudUpdateStart();
 
 // World markers: called from ComposeHudLayers once the UI has been drawn into the HUD layer, before the flat panel is drawn.  Takes the
 // part of the layer around each drawn AI marker, shows it over its car in both eyes (a billboard at the car's depth, facing the head), and clears it from the layer

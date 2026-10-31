@@ -1,6 +1,7 @@
 // OpenVR / SteamVR session: initialisation, head pose, per-eye camera deltas, floating menu screen, and submitting the finished frame to the compositor.
 // With [VR] Api=openxr the runtime calls go through openxr_runtime.cpp instead; the maths and the game side are the same.
 #include "vr_runtime.h"
+#include "chase_camera.h"
 #include "config.h"
 #include "d3d_hooks.h"
 #include "display_modes.h"
@@ -600,6 +601,9 @@ void VrUpdatePose()
             headDelta.m[3][j] = -s;
         }
     }
+    // (Cockpit view: the head sits at the driver's seat in the car's frame, with the chase camera's update hooked (chase_camera.cpp): VrComposeSeat puts the delta from
+    // the game camera to the seat in front of the head's tracking, and while the chase camera is not the one in use (a bumper camera, a replay) or the hook is missing,
+    // the head stays where the camera is.)
     double halfIpd = 0.5 * g_vr.ipd * g_cfg.ipdScale * g_cfg.positionScale;
     g_vr.eyeCameraDelta[2] = headDelta;
     Matrix4 headToEye[2];
@@ -618,7 +622,37 @@ void VrUpdatePose()
         g_vr.eyeCameraDelta[1] = headDelta;
         g_vr.eyeCameraDelta[1].m[3][0] -= halfIpd;
     }
+    for (int i = 0; i < 3; i++)
+        g_vr.trackedDelta[i] = g_vr.eyeCameraDelta[i];
     g_vr.poseValid = true;
+    VrComposeSeat();
+}
+
+void VrComposeSeat()
+{
+    Matrix4 toSeat;
+    const double seat[3] = {g_cfg.carSeatX, g_cfg.carSeatY, g_cfg.carSeatZ};
+    const bool put = g_cfg.cockpit && ChaseCameraHooked() && IsRaceMode() && !InMenuScene() && CarSeatDelta(seat, toSeat);
+    for (int i = 0; i < 3; i++)
+        g_vr.eyeCameraDelta[i] = put ? Multiply(toSeat, g_vr.trackedDelta[i]) : g_vr.trackedDelta[i];
+    g_vr.seatActive = put;
+}
+
+const Matrix4& VrHudDelta(int eye)
+{
+    return g_vr.seatActive ? g_vr.trackedDelta[eye] : g_vr.eyeCameraDelta[eye];
+}
+double VrHudDistance()
+{
+    return g_vr.seatActive ? g_cfg.cockpitHudDistance : g_cfg.hudDistance;
+}
+double VrHudScale()
+{
+    return g_vr.seatActive ? g_cfg.cockpitHudScale : g_cfg.hudScale;
+}
+double VrHudOffsetY()
+{
+    return g_vr.seatActive ? g_cfg.cockpitHudOffsetY : g_cfg.hudOffsetY;
 }
 
 // Where the floating menu screen goes: flat in front of the head, facing it (right-handed tracking space)
@@ -676,8 +710,62 @@ static void SubmitFrameOpenXr(bool sceneFrame, bool sharedCopied, UINT width, UI
 
 // In-game switches: the 3D rear-view mirror (numpad 6 by default), the timing probe (numpad 7).  Pressing the mirror key flips it
 // live and writes the new state to BlurVR.log.
+// The cockpit view (numpad 0 flips it) and, while it is on in a race, the seat's place: numpad + / - move it forward / back, * / / up / down, 3 / 1 right / left,
+// a step of 5 cm every 80 ms while held.  The place is kept for the car (BlurVR_seats.ini) once the keys are let go, and logged.
+static void PollCockpitKeys()
+{
+    static bool toggleWasDown = false;
+    bool toggleDown = g_cfg.keyCockpit && (GetAsyncKeyState(g_cfg.keyCockpit) & 0x8000) != 0;
+    if (toggleDown && !toggleWasDown && g_cfg.vr) {
+        g_cfg.cockpit = g_cfg.cockpit ? 0 : 1;
+        Log("switch: cockpit view = %d (seat %.2f %.2f %.2f)", g_cfg.cockpit, g_cfg.carSeatX, g_cfg.carSeatY, g_cfg.carSeatZ);
+    }
+    toggleWasDown = toggleDown;
+    static bool dirty = false;
+    static DWORD lastStep = 0;
+    if (g_cfg.cockpit && ChaseCameraHooked() && IsRaceMode() && !InMenuScene()) {
+        double* const seatY = &g_cfg.carSeatY;
+        double* const seatZ = &g_cfg.carSeatZ;
+        struct Nudge {
+            int key;
+            double* value;
+            double step;
+        } nudges[6] = {{VK_ADD, seatZ, 0.05}, {VK_SUBTRACT, seatZ, -0.05}, {VK_MULTIPLY, seatY, 0.05}, {VK_DIVIDE, seatY, -0.05},
+                       {VK_NUMPAD3, &g_cfg.carSeatX, 0.05}, {VK_NUMPAD1, &g_cfg.carSeatX, -0.05}};
+        const DWORD now = GetTickCount();
+        bool any = false;
+        for (int i = 0; i < 6; i++)
+            if (GetAsyncKeyState(nudges[i].key) & 0x8000) {
+                any = true;
+                if (now - lastStep >= 80)
+                    *nudges[i].value += nudges[i].step;
+            }
+        if (any) {
+            if (now - lastStep >= 80)
+                lastStep = now;
+            dirty = true;
+            return;
+        }
+    }
+    if (dirty) { // (the keys are up)
+        dirty = false;
+        Log("cockpit seat (in the car's frame): %.2f %.2f %.2f", g_cfg.carSeatX, g_cfg.carSeatY, g_cfg.carSeatZ);
+        if (ChaseCameraSaveSeat())
+            return; // (kept for this car in BlurVR_seats.ini: the seat of BlurVR.ini stays the default for cars that have none)
+        const std::string ini = std::string(g_modDir) + "BlurVR.ini";
+        const char* names[3] = {"CarSeatX", "CarSeatY", "CarSeatZ"};
+        const double values[3] = {g_cfg.carSeatX, g_cfg.carSeatY, g_cfg.carSeatZ};
+        for (int i = 0; i < 3; i++) {
+            char text[32];
+            snprintf(text, sizeof(text), "%.2f", values[i]);
+            WritePrivateProfileStringA("VR", names[i], text, ini.c_str());
+        }
+    }
+}
+
 static void PollSwitchKeys()
 {
+    PollCockpitKeys();
     static bool mirrorWasDown = false;
     bool mirrorDown = g_cfg.keyMirror && (GetAsyncKeyState(g_cfg.keyMirror) & 0x8000) != 0;
     if (mirrorDown && !mirrorWasDown) {

@@ -1,6 +1,7 @@
 // Stereo duplication of main-pass draws: rewriting the tracked shader matrices for one eye.
 #include "stereo_scene.h"
 #include "camera.h"
+#include "chase_camera.h"
 #include "config.h"
 #include "core.h"
 #include "d3d_hooks.h"
@@ -329,10 +330,25 @@ void ApplyEyeConstants(IDirect3DDevice9* device, int eye)
             switch (tracked.kind) {
                 case TK_WorldViewProj:
                 case TK_ViewProj:
+                    if (tracked.kind == TK_WorldViewProj && g_cockpitSeatOn && g_eyeMainCamera) {
+                        const Matrix4 worldView = Multiply(original, *gameProjectionInverse);
+                        Matrix4 pinned;
+                        if (ChaseCameraPinWorldView(device, g_currentVsInfo->id, worldView, pinned)) {
+                            remapped = Multiply(Multiply(pinned, *delta), newProj);
+                            break;
+                        }
+                    }
                     remapped = Multiply(original, clipRemap);
                     break;
                 case TK_WorldView:
                 case TK_View:
+                    if (tracked.kind == TK_WorldView && g_cockpitSeatOn && g_eyeMainCamera) {
+                        Matrix4 pinned;
+                        if (ChaseCameraPinWorldView(device, g_currentVsInfo->id, original, pinned)) {
+                            remapped = Multiply(pinned, *delta);
+                            break;
+                        }
+                    }
                     remapped = Multiply(original, *delta);
                     break;
                 case TK_Projection:
@@ -345,6 +361,24 @@ void ApplyEyeConstants(IDirect3DDevice9* device, int eye)
         }
         writes[writeCount] = {tracked.reg, count, out};
         writeCount++;
+    }
+    // A shader that takes the world matrix on its own (g_mWorld, with the view and projection in another constant) gets the car's draws held to the body the same way.
+    if (g_cockpitSeatOn && g_eyeMainCamera && g_matrixLayout && writeCount < kMaxWrites) {
+        for (const ShaderConstant& c : g_currentVsInfo->constants) {
+            if (c.count != 4 || c.reg + 4 > 256 || (c.name != "g_mWorld" && c.name != "g_WorldMatrix"))
+                continue;
+            Matrix4 world, pinned;
+            LoadMatrix(&g_vsConstants[c.reg * 4], g_matrixLayout, world);
+            bool skinned = false;
+            for (const ShaderConstant& other : g_currentVsInfo->constants)
+                skinned = skinned || other.name.find("Palette") != std::string::npos;
+            if (ChaseCameraPinWorld(device, g_currentVsInfo->id, world, skinned, pinned)) {
+                StoreMatrix(pinned, g_matrixLayout, values[writeCount]);
+                writes[writeCount] = {c.reg, 4, values[writeCount]};
+                writeCount++;
+            }
+            break;
+        }
     }
     // The camera's world position (g_vViewPosition): view vectors for specular, reflections and fog, billboards turned to face
     // the camera.  Left alone it keeps all of that at the game's camera while the geometry moves with the head, so the shading

@@ -146,6 +146,7 @@ bool g_haveLatest = false;
 
 typedef void(__attribute__((fastcall)) * AiHudDrawFn)(void* self, void* edx);
 AiHudDrawFn g_origDraw = NULL;
+const unsigned char* g_updateStart = NULL; // where the update was found (AiHudUpdateStart)
 bool g_hooked = false;
 int g_insane = 0;
 bool g_layoutLogged = false;
@@ -392,6 +393,7 @@ void TryInstall(unsigned frame)
         return;
     }
     tries = 5;
+    g_updateStart = code.draw;
     if (!g_lockReady) {
         InitializeCriticalSection(&g_lock);
         g_lockReady = true;
@@ -1044,6 +1046,11 @@ int DrawMarkers(IDirect3DDevice9* device, IDirect3DTexture9* hudTexture, IDirect
 }
 
 } // namespace
+
+const unsigned char* AiHudUpdateStart()
+{
+    return g_updateStart;
+}
 
 void AiHudPoll()
 {

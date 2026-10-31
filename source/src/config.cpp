@@ -168,6 +168,16 @@ void LoadConfig()
     ReadIniString("VR", "OpenXRRuntime", "", g_cfg.openxrRuntime, sizeof(g_cfg.openxrRuntime));
     g_cfg.fitDesktopWindow = ReadIniInt("VR", "FitDesktopWindow", 1, "Render");
     g_cfg.foveationReport = ReadIniInt("Foveation", "Report", 1);
+    g_cfg.cockpit = g_cfg.vr ? ReadIniInt("VR", "CockpitView", 0) : 0;
+    g_cfg.carSeatX = ReadIniDouble("VR", "CarSeatX", -0.35);
+    g_cfg.carSeatY = ReadIniDouble("VR", "CarSeatY", 0.8);
+    g_cfg.carSeatZ = ReadIniDouble("VR", "CarSeatZ", -0.1);
+    g_cfg.carSeatBody = ReadIniInt("VR", "CarSeatBody", 1);
+    g_cfg.cockpitHudDistance = ReadIniDouble("VR", "CockpitHudDistance", 1.2);
+    g_cfg.cockpitHudScale = ReadIniDouble("VR", "CockpitHudScale", 0.6);
+    g_cfg.cockpitHudOffsetY = ReadIniDouble("VR", "CockpitHudOffsetY", 0.0);
+    g_cfg.cockpitDriver = ReadIniInt("VR", "CockpitDriver", 0);
+    g_cfg.keyCockpit = ReadIniInt("Debug", "KeyCockpit", 0x60);
     g_cfg.cullMarginDeg = ReadIniDouble("Culling", "MarginDeg", 6.0);
     g_cfg.cullPullBack = ReadIniDouble("Culling", "PullBack", 0.3);
     char buf[32];

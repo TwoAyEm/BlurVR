@@ -38,13 +38,13 @@ D3DVIEWPORT9 ComputeHudViewport(const D3DVIEWPORT9& base, int eye)
     const EyeBox& box = g_vr.eyeBox[eye];
     double tanWidth = fmax(1e-3, box.right - box.left), tanHeight = fmax(1e-3, box.up + box.down);
     double pxPerTan = eyeW / tanWidth;
-    double panelWidth = eyeW * g_cfg.hudScale;
+    double panelWidth = eyeW * VrHudScale();
     double centerX, centerY; // panel centre in pixels (full SBS image)
     if (g_cfg.hudWorldLocked && g_vr.poseValid) {
         // World-locked: a point straight ahead of the game camera at hudDistance, seen through this eye's current head
         // pose.
-        double distance = fmax(0.3, g_cfg.hudDistance);
-        const Matrix4& delta = g_vr.eyeCameraDelta[eye];
+        double distance = fmax(0.3, VrHudDistance());
+        const Matrix4& delta = VrHudDelta(eye);
         double vx = delta.m[3][0], vy = delta.m[3][1] + 0, vz = distance * delta.m[2][2] + delta.m[3][2];
         vx += distance * delta.m[2][0];
         vy += distance * delta.m[2][1];
@@ -57,13 +57,13 @@ D3DVIEWPORT9 ComputeHudViewport(const D3DVIEWPORT9& base, int eye)
     } else {
         // Head-locked: centred on this eye's optical axis, converged for the apparent distance
         double shift =
-            0.5 * g_vr.ipd * g_cfg.ipdScale / fmax(0.3, g_cfg.hudDistance) * pxPerTan * (eye == 0 ? 1.0 : -1.0);
+            0.5 * g_vr.ipd * g_cfg.ipdScale / fmax(0.3, VrHudDistance()) * pxPerTan * (eye == 0 ? 1.0 : -1.0);
         double fwd = (-box.left) / tanWidth;
         centerX = eye * eyeW + fwd * eyeW + shift;
         centerY = imageHeight / 2.0;
     }
     centerX += g_cfg.hudXOffset * eyeW * (eye == 0 ? 1.0 : -1.0);
-    centerY += g_cfg.hudOffsetY * imageHeight;
+    centerY += VrHudOffsetY() * imageHeight;
     double scale = panelWidth / imageWidth, panelHeight = imageHeight * scale;
     double x0 = centerX - panelWidth / 2.0, y0 = centerY - panelHeight / 2.0;
     // keep the whole panel inside this eye's half (it sticks to the edge if you look far away from it)
@@ -840,15 +840,15 @@ void ComposeHudLayers(IDirect3DDevice9* device)
     float texCoords[4][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
     // draw the bound layer (or, with eyeTexture, one texture per eye) as the world-locked panel at HudDistance
     auto drawLayerQuads = [&](IDirect3DTexture9* const* eyeTexture = NULL, bool screenUv = false) {
-        double distance = fmax(0.3, g_cfg.hudDistance);
-        double panelWidth = g_cfg.hudScale * 0.5 * (tw0 + tw1) * distance, panelHeight = panelWidth * bh / bw;
-        double cyOff = -g_cfg.hudOffsetY * panelHeight;
+        double distance = fmax(0.3, VrHudDistance());
+        double panelWidth = VrHudScale() * 0.5 * (tw0 + tw1) * distance, panelHeight = panelWidth * bh / bw;
+        double cyOff = -VrHudOffsetY() * panelHeight;
         double cornerOffsets[4][2] = {{-panelWidth / 2, panelHeight / 2 + cyOff},
                                       {panelWidth / 2, panelHeight / 2 + cyOff},
                                       {-panelWidth / 2, -panelHeight / 2 + cyOff},
                                       {panelWidth / 2, -panelHeight / 2 + cyOff}};
         for (int eye = 0; eye < 2; eye++) {
-            const Matrix4& delta = g_vr.eyeCameraDelta[eye];
+            const Matrix4& delta = VrHudDelta(eye);
             const EyeBox& box = g_vr.eyeBox[eye];
             double tanWidth = fmax(1e-3, box.right - box.left), tanHeight = fmax(1e-3, box.up + box.down);
             ScreenVertex corners[4];

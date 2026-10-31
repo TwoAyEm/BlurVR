@@ -96,7 +96,7 @@ HRESULT DrawMirrorSceneStereo(IDirect3DDevice9* device, const DrawCall& draw)
     // where each eye sits relative to the rear camera, along its own axes
     double eyePos[2][3], mid[3];
     for (int eye = 0; eye < 2; eye++)
-        EyePosition(g_vr.eyeCameraDelta[eye], eyePos[eye]);
+        EyePosition(VrHudDelta(eye), eyePos[eye]); // (the head against the seat in the cockpit view, against the game camera otherwise: the panel is in front of the driver)
     for (int j = 0; j < 3; j++)
         mid[j] = 0.5 * (eyePos[0][j] + eyePos[1][j]);
 

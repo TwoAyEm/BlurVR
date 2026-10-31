@@ -51,6 +51,8 @@ struct VrState {
     double ipd = 0.063;
     bool poseValid = false, recenterPending = false;
     Matrix4 eyeCameraDelta[3]; // camera-space delta per eye (0 left, 1 right, 2 centre), row-vector
+    bool seatActive = false;   // the cockpit seat is being put in front of trackedDelta (VrComposeSeat): the HUD then sits in the seat's space
+    Matrix4 trackedDelta[3];   // the same without the cockpit seat (the head's tracking and the eye's place only); VrComposeSeat() puts the seat in front
     double refYaw = 0, refPos[3] = {0, 0, 0}; // head pose that counts as "straight ahead" (zero when SteamVR does the recentring)
     double hmdPos[3] = {0, 1.5, 0}, hmdFwd[3] = {0, 0, -1}; // tracking space (right-handed), for the menu screen
     unsigned long long frameCount = 0, submitErrs = 0;
@@ -66,6 +68,15 @@ void ReleaseStagingResources();
 void ReleaseSharedTransport();
 bool VrInit();
 void VrUpdatePose();
+// eyeCameraDelta = the cockpit seat's delta (chase_camera.cpp) followed by trackedDelta.  Called at the end of VrUpdatePose and again each time the game sets the
+// camera of the main view, when the car's pose and the camera are from the same moment.
+void VrComposeSeat();
+// What the HUD (and the head parallax of the rear-view mirror) are placed with: the game camera's space normally, the seat's space while the cockpit seat is on, so that
+// the HUD is in front of the driver and not 2 m in front of a chase camera that is several metres behind the car.
+const Matrix4& VrHudDelta(int eye);
+double VrHudDistance();
+double VrHudScale();
+double VrHudOffsetY();
 void VrSubmitFrame(IDirect3DDevice9* device);
 // Before the real Present of a race frame: paint one eye's view into the back buffer so the window on the desktop shows that instead of
 // the whole side-by-side picture.  The headset got its copy in VrSubmitFrame, which is over by then.  True: the view was painted at the

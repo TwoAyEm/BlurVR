@@ -1,4 +1,4 @@
-# BlurVR 1.7.1c
+# BlurVR 1.8
 
 **Seated VR for Blur (SteamVR / OpenVR, or OpenXR).**
 
@@ -9,13 +9,14 @@ Play Blur in a headset, seated. Built and tested with a Valve Index; any SteamVR
 
 [Watch the video](https://www.youtube.com/watch?v=-Gwqe6Wcjd8) · [Download the latest release](https://github.com/TwoAyEm/BlurVR/releases)
 
-**Contents:** [What it does](#what-it-does) · [Requirements](#requirements) · [Install](#install) · [Resolution](#resolution) · [Graphics quality](#graphics-quality) · [Keys](#keys) · [Settings](#settings) · [OpenXR](#openxr-optional) · [How it works](#how-it-works) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting) · [What is new](#what-is-new) · [License](#license)
+**Contents:** [What it does](#what-it-does) · [Requirements](#requirements) · [Install](#install) · [Resolution](#resolution) · [Graphics quality](#graphics-quality) · [Cockpit view](#cockpit-view) · [Keys](#keys) · [Settings](#settings) · [OpenXR](#openxr-optional) · [How it works](#how-it-works) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting) · [What is new](#what-is-new) · [License](#license)
 
 ## What it does
 
 - **Menus:** the game is shown on a floating screen in front of you (SteamVR overlay).
 - **Races:** true stereo 3D, seated. Your head moves the in-game camera (chase view and in-car view).
   - The camera position is fixed to the car; you look around from your seat.
+  - **Cockpit view (optional):** your head sits in the driver's seat and the view is locked to the car, with the HUD in the car in front of you. See [Cockpit view](#cockpit-view).
   - Shadows, lights, motion blur and the HUD are all handled per eye.
   - The rear-view mirror is a real 3D panel: the road behind you is rendered once per eye, with depth.
   - The markers over the AI cars (name, weapon, health) are shown over their cars in the world, at their depth, whichever way you look, and go to the cars nearest to your head. The HUD no longer sways with the car's acceleration.
@@ -70,6 +71,16 @@ In VR the size is kept in `BlurVR.ini` (`[VR] Resolution=WxH`): the game starts 
 
 **Use the game's own quality setting** (the video options in the game's menus) to trade picture quality for frame rate. It adjusts the reflections and the shadows, among other things, for the whole picture and without any help from BlurVR; on the lowest level a Valve Index held 90 frames a second at 3584x2016 in a race. BlurVR's own switches for single effects (`Reflections` under `[VR]`, and `NoLensFlare`) do part of the same job: they are kept for now, but the game's own setting is the preferred way and they may be removed in a later version.
 
+## Cockpit view
+
+Off by default. Set `CockpitView=1` under `[VR]` in `BlurVR.ini`, or press **Num0** in a race, and your eyes sit in the driver's seat instead of at the game's chase camera. Num0 switches it back to the normal view at any time.
+
+- **The view is locked to the car.** The seat is placed on the car's own body, not on the chase camera (which runs metres ahead of the car at speed, swings in corners and pulls back). The car's chassis and cabin are drawn rigidly at that body, so they cannot move against your view over bumps or in turns: only the world moves past. Your head's tracking is added on top, so you look around from the seat.
+- **The driver is hidden.** His animation moves against the car and your head is inside him. `CockpitDriver=1` shows him again.
+- **The HUD** (position, map, weapons) and the rear-view mirror sit in front of the seat, in the car: `CockpitHudDistance`, `CockpitHudScale` and `CockpitHudOffsetY` under `[VR]` set where and how big.
+- **The seat's place** starts at `CarSeatX`, `CarSeatY` and `CarSeatZ` under `[VR]` (metres right, up and forward of the point the chase camera follows). In a race with the cockpit view on, **Num+ / Num-** move it forward / back, **Num\* / Num/** up / down and **Num3 / Num1** right / left, 5 cm a step while the key is held. When you let go the place is kept for the car you are driving (in `BlurVR_seats.ini`) and used again every time you drive that car; a car without a kept place starts at the `CarSeat` values. Cars are told apart by the weight and inertia the game holds for them.
+- The cockpit view needs the game's chase camera code to be found in your `Blur.exe`. It was tried on the Steam build; on a build where it is not found the cockpit view is not available and the game keeps its normal camera (see [Troubleshooting](#troubleshooting)). It works only while the chase camera is the one in use: with the bumper camera or in a replay the view stays where the game's camera is.
+
 ## Keys
 
 | Key | What it does |
@@ -77,6 +88,8 @@ In VR the size is kept in `BlurVR.ini` (`[VR] Resolution=WxH`): the game starts 
 | **F9** | Recenter (sit comfortably, look straight ahead, press F9). This is SteamVR's own recentre, so recentering in SteamVR does the same. BlurVR also recenters at the start of every race (set `AutoRecenter=0` in `BlurVR.ini` to turn that off). |
 | **F10** | Head tracking on/off (stereo image stays, camera stops following your head) |
 | **F8** | Mode override: AUTO → FORCE MENU → FORCE RACE. Use it if the mod picks the wrong mode. Flat (`Stereo=0`) it does the same job for the menu key repeat limit: AUTO → forced on → forced off. |
+| **Num0** | Cockpit view on/off, in a race (same as `CockpitView` in the ini; see [Cockpit view](#cockpit-view)) |
+| **Num+ / Num-**, **Num\* / Num/**, **Num3 / Num1** | With the cockpit view on, in a race: move the seat forward / back, up / down, right / left |
 | **Num6** | 3D rear-view mirror on/off (same as `Mirror3D` in the ini) |
 | **Num7** | Timing probe on/off (see [Troubleshooting](#troubleshooting)) |
 | **Num8** | Save what the headset sees as picture files (see [Troubleshooting](#troubleshooting)) |
@@ -157,6 +170,10 @@ Blur counts how long a key is held in frames and, after a second, repeats it eve
 | `DesktopView` | `off` | What the window on the desktop shows: `off` = no picture of the game at all: the window says "Playing in VR" with the game's logo and a reminder to click the window for the keyboard and gamepad (also in the menus and while loading), and is painted twice a second, which saves the GPU the copy of the game's picture. `left` = the left eye's view in a race (cropped to the window's shape and drawn at the window's own size, which is cheap), `right` = the right eye's, `both` = the whole side-by-side picture. The headset's picture is not affected. `off` needs a windowed game without multisampling (otherwise the window shows the left eye's view). Before 1.5 the default was `left`. |
 | `DesktopPresentEvery` | `1` | In a race, the window on the desktop (a mirror of the headset) really updates only every n-th frame (2-4 saves a little GPU time; 1 = every frame) |
 | `FitDesktopWindow` | `1` | 1 = the game's window is never made bigger than the work area of its monitor (at a 3840x2160 setting it would cover the whole desktop, or two monitors). The game still renders at the size it chose; the window shows one eye's view of it scaled to fit (`DesktopView`). Windowed mode only. 0 = as the game wants. |
+| `CockpitView` | `0` | 1 = cockpit view: in a race your head sits in the driver's seat, fixed to the car (see [Cockpit view](#cockpit-view)). **Num0** switches it in game. |
+| `CarSeatX`, `CarSeatY`, `CarSeatZ` | `-0.35`, `0.8`, `-0.1` | The seat's place in the car, metres right, up and forward of the point the chase camera follows. The place you set in game with the numpad is kept for each car and used instead (`BlurVR_seats.ini`); these are the start for a car without one. |
+| `CockpitHudDistance`, `CockpitHudScale`, `CockpitHudOffsetY` | `1.2`, `0.6`, `0` | The HUD and the rear-view mirror with the cockpit view on: their distance in front of the seat in metres, their size (a fraction of one eye's width) and their height. They take the place of `Distance`, `Scale` and `OffsetY` under `[Hud]` in the cockpit view. |
+| `CockpitDriver` | `0` | 1 = the driver model is drawn in the cockpit view. 0 = hidden: his animation moves against the car and your head is inside him. |
 | `FpsCounter` | `0` | 1 = a small panel in the headset shows how many frames a second the game presents (in races and in the showroom; **Num9** switches it in game), with a graph of the last 18 seconds under it. It stays in front of your face, a little to the lower left, and is green at the headset's refresh rate, yellow below it and red far below (a game that SteamVR holds to half the headset's rate shows red; with `Api=openxr` the rate is the one the OpenXR runtime reports for its display). The line of the graph has the same colours and is scaled from the lowest to the highest rate of those seconds. Off by default |
 
 ### `[Render]`  (VR only)
@@ -206,6 +223,7 @@ The floating screen in menus.
 | `KeyPerf` | `0x67` (Num7) | Key for the timing probe switch |
 | `KeyDump` | `0x68` (Num8) | Key for saving the headset picture as files |
 | `KeyFps` | `0x69` (Num9) | Key for the FPS counter switch |
+| `KeyCockpit` | `0x60` (Num0) | Key for the cockpit view switch |
 | `AdjustViewRotation` | `1` | |
 
 ### `[Culling]`  (VR only)
@@ -258,11 +276,13 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - Menus are the game image on a flat screen; use mouse/keyboard/controller as normal.
 - The markers over the AI cars were tried on the Steam build and on a non-Steam build; with another build of the game they may stay on the HUD panel. A popup in the middle of the screen can take a piece of itself along with a marker, and a lock-on reticle or rival arrow further from the marker than its picture reaches is cut off.
 - By default (`DesktopView=off`) the window on the desktop only says "Playing in VR", but it is still the game's window: closing it quits the game, and **the keyboard and the gamepad go to the game only while that window has the focus**, so click it once after the game has started (it says so under "Playing in VR"). With `left` or `right` it is a mirror of one eye, cropped to the window's shape; it is not the headset's full view.
+- The cockpit view hides the driver, so there are no hands on the wheel, and it is fixed to the car's body: bumps and landings move the whole view, which is what the car does. It was tried on the Steam build only.
 - The menu key repeat limit is also on while a race loads and during its countdown (BlurVR sees the same full-screen fill there), so a key held down through the start reaches the game as taps until the countdown ends.
 
 ## Troubleshooting
 
 - **The view is still culled at the edges / looking away from the direction of travel:** set `Log=1` under `[General]`, start a race for a minute, and look in `BlurVR.log` for the lines that start with `game camera:` and `head frustum:` (the water's reflection has `reflection frustum:` lines of its own). They say whether the game's camera code was found in your `Blur.exe`, whether its data is laid out as expected, and how many frustums were replaced. If they say it was not found, send `BlurVR.log` and the size and date of your `Blur.exe`.
+- **The cockpit view does nothing (Num0 is pressed and the view stays at the chase camera):** set `Log=1` under `[General]`, start a race and look in `BlurVR.log` for the lines that start with `cockpit:`. They say whether the game's chase camera code was found, whether the car's body was found and which car it is. If the chase camera's update is not found (`NOT HOOKED`) the cockpit view is not available on your build; send `BlurVR.log`.
 - **The markers over the AI cars stay on the HUD panel:** they need `Stereo=1` and the game's camera code to be found. With `Log=1` the `game camera:` and `ai hud:` lines in `BlurVR.log` say whether the game's code was found and why a check failed; send the log and the size and date of your `Blur.exe`.
 - **Nothing happens / the game is flat:** start SteamVR first; run `uninstall.bat` to go back to the plain game. With `Api=openxr` start the OpenXR runtime instead and read the `OpenXR:` lines in `BlurVR.log` (set `Log=1`): they say whether a 32-bit runtime was found, whether it sees a headset and how far the start got (see [OpenXR](#openxr-optional)).
 - **Something looks wrong in the headset:** press **Num8** while it is on screen. BlurVR saves `BlurVR_dump_<time>_picture_*.bmp` (the whole side-by-side picture, large files) and one file per HUD layer in the BlurVR folder: attach them to the report.
@@ -272,6 +292,17 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **To run the game flat,** set `Stereo=0` (SteamVR is not used; the `[Display]` and `[Input]` settings still apply), or `Enabled=0` (the mod does nothing), or run `uninstall.bat`.
 
 ## What is new
+
+### Version 1.8
+
+**Cockpit view (new)**
+
+- **New: a cockpit view, locked to the car.** `CockpitView=1` under `[VR]` (or **Num0** in a race) puts your head in the driver's seat. The seat is on the car's body and the car's chassis and cabin are drawn rigidly at it, so nothing in the car moves against your view, over bumps, on kerbs or in slides; the world moves past instead. See [Cockpit view](#cockpit-view).
+- **The seat is yours to set and is kept for each car.** The numpad moves it (Num+ / Num-, Num\* / Num/, Num3 / Num1) and the place is kept for the car you are driving, so each car has its own seat.
+- **The HUD and the rear-view mirror sit in the car,** in front of the seat (`CockpitHudDistance`, `CockpitHudScale`, `CockpitHudOffsetY`).
+- **The driver is hidden** (`CockpitDriver=1` shows him): his animation moves against the car and your head is inside him.
+- New settings under `[VR]`: `CockpitView`, `CarSeatX`, `CarSeatY`, `CarSeatZ`, `CockpitHudDistance`, `CockpitHudScale`, `CockpitHudOffsetY`, `CockpitDriver`; under `[Debug]`: `KeyCockpit`. New file `BlurVR_seats.ini` in the `BlurVR` folder (the seats kept for each car).
+- Tried on the Steam build only. Without the game's chase camera code found in `Blur.exe` the cockpit view is not available and the game keeps its normal camera.
 
 ### Version 1.7.1c
 

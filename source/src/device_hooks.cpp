@@ -1,6 +1,7 @@
 // The IDirect3DDevice9 hooks: state tracking, shader tracking, draw interception, Present/Reset.
 #include "device_hooks.h"
 #include "ai_hud.h"
+#include "chase_camera.h"
 #include "config.h"
 #include "core.h"
 #include "d3d_hooks.h"
@@ -90,6 +91,7 @@ static HRESULT STDMETHODCALLTYPE H_Present(IDirect3DDevice9* d, const RECT* a, c
     PerfPoll();
     GameCameraPoll();
     AiHudPoll();
+    ChaseCameraPoll();
     InputLimiterFrame();
     return hr;
 }

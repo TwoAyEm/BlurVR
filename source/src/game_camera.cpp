@@ -4,6 +4,7 @@
 #include "game_camera.h"
 #include <cmath>
 #include "camera.h"
+#include "chase_camera.h"
 #include "config.h"
 #include "core.h"
 #include "game_mode.h"
@@ -521,8 +522,21 @@ void __attribute__((fastcall)) H_SetCameraData(void* self, void* edx, const void
                 g_mainData = NULL;
         }
         if (snapshot.isMain) {
-            g_counters.dataMain++;
-            PublishPose(snapshot); // (only ai_hud.cpp reads the pose)
+            // The planar reflection is sometimes fed from the main camera's own struct (the shortcut above takes it for the main camera at once): its camera is then the
+            // main camera mirrored in the water plane, a few metres under the real one.  The measurement of the cockpit view saw the camera jump between two heights 3.7 m apart
+            // from one sample to the next, and the seat was then rebuilt from the mirrored camera.  A mirror of the last main camera is the reflection's, not the player's.
+            const int mirror = ReflectionAxisOf(snapshot);
+            if (mirror >= 0) {
+                snapshot.isMain = false;
+                snapshot.mirrorAxis = mirror;
+                static unsigned logged = 0;
+                if (logged++ < 3)
+                    Log("game camera: a camera fed from the main camera's struct is its mirror in the water plane (turned round in axis %c): taken for the reflection's, not the player's", "XYZ"[mirror]);
+            } else {
+                g_counters.dataMain++;
+                PublishPose(snapshot); // (ai_hud.cpp and the cockpit view read the pose)
+                ChaseCameraRefresh();
+            }
         }
     }
     g_snapshot = snapshot;
