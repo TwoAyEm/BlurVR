@@ -150,6 +150,8 @@ const unsigned char* g_updateStart = NULL; // where the update was found (AiHudU
 bool g_hooked = false;
 int g_insane = 0;
 bool g_layoutLogged = false;
+unsigned g_hudStarts = 0;
+unsigned long long g_lastSaneFrame = 0;
 
 // ---- the detour and the markers it moves (see "moving the markers" below)
 const int kRelocSlots = 8;       // slots on the HUD layer that markers are moved to
@@ -275,6 +277,11 @@ void Harvest(const BYTE* self, const Before* before, int beforeCount)
     if (insane && !sane) {
         if (++g_insane == 30)
             Log("ai hud: the markers' world positions are not numbers, the layout of this build is not the expected one");
+    }
+    if (sane) {
+        if (g_vr.frameCount > g_lastSaneFrame + 30)
+            g_hudStarts++;
+        g_lastSaneFrame = g_vr.frameCount;
     }
     if (!g_layoutLogged && sane) {
         g_layoutLogged = true;
@@ -1046,6 +1053,11 @@ int DrawMarkers(IDirect3DDevice9* device, IDirect3DTexture9* hudTexture, IDirect
 }
 
 } // namespace
+
+unsigned AiHudStartCount()
+{
+    return g_hudStarts;
+}
 
 const unsigned char* AiHudUpdateStart()
 {

@@ -6,6 +6,9 @@
 
 // Called once per presented frame (from H_Present).  Installs the hook the first time, when the VR half runs and the function is found in this Blur.exe.
 void AiHudPoll();
+// How many times the game's AI HUD has started updating (its update was not seen for half a second or more, and then was): the HUD runs from the countdown of a race
+// on, so the cockpit view uses it as a second sign that the race's intro is over.
+unsigned AiHudStartCount();
 // The start of the game's UIAiHud update (0 until it was found; the bytes there are the mod's own jump once it is hooked, those further in are the game's).
 const unsigned char* AiHudUpdateStart();
 

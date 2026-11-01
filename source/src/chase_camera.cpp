@@ -355,6 +355,30 @@ static unsigned CarKeyOfBody(const BYTE* body)
     return key ? key : 1;
 }
 
+// The player's car can change under the same car number (the next race, another car picked in the showroom): the key is read again while the car is followed, and when
+// another one has been there for a while the seat of that car is taken.  (It was read only when the car was first found, so every car of a session got the first one's seat.)
+static void NoteCarModel()
+{
+    static unsigned candidate = 0, streak = 0;
+    void* record = g_getPlayer(g_playerCar);
+    void* vehicle = record ? g_getVehicle(record, g_playerCar) : NULL;
+    const BYTE* body = vehicle ? *(const BYTE* const*)((const BYTE*)vehicle + g_bodyOffset) : NULL;
+    const unsigned key = CarKeyOfBody(body);
+    if (!key || key == g_carKey) {
+        streak = 0;
+        return;
+    }
+    if (key != candidate) {
+        candidate = key;
+        streak = 0;
+    }
+    if (++streak < 60)
+        return;
+    streak = 0;
+    g_carKey = key;
+    ApplySeatForKey();
+}
+
 bool FindBody(const float* target, float* out, float* quat = NULL, bool* hasQuat = NULL)
 {
     if (hasQuat)
@@ -371,6 +395,7 @@ bool FindBody(const float* target, float* out, float* quat = NULL, bool* hasQuat
             if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < reach * reach) {
                 memcpy(out, body, sizeof(body));
                 g_lostFrames = 0;
+                NoteCarModel();
                 return true;
             }
         }

@@ -7,6 +7,7 @@
 #include "display_modes.h"
 #include "core.h"
 #include "draw_dispatch.h"
+#include "ai_hud.h"
 #include "fps_counter.h"
 #include "frame_dump.h"
 #include "game_mode.h"
@@ -632,7 +633,28 @@ void VrComposeSeat()
 {
     Matrix4 toSeat;
     const double seat[3] = {g_cfg.carSeatX, g_cfg.carSeatY, g_cfg.carSeatZ};
-    const bool put = g_cfg.cockpit && ChaseCameraHooked() && IsRaceMode() && !InMenuScene() && CarSeatDelta(seat, toSeat);
+    // The cockpit view waits for the race's intro: the seat is taken only once the race menu overlay (the intro's fill) has gone away after the race began, which is when
+    // the countdown starts.  Overlays seen before the race began do not count.  (If neither the overlay nor the AI HUD's start is seen, the seat is taken a minute into the race anyway.)
+    static bool wasRace = false, introLogged = false;
+    static unsigned goneAtStart = 0, hudAtStart = 0;
+    static ULONGLONG raceStartMs = 0;
+    const bool race = IsRaceMode() && !InMenuScene();
+    if (race && !wasRace) {
+        goneAtStart = RaceMenuGoneCount();
+        hudAtStart = AiHudStartCount();
+        raceStartMs = GetTickCount64();
+        introLogged = false;
+    }
+    wasRace = race;
+    // (the intro of some races has no fill that is recognised as the race menu; the AI HUD starts updating when the countdown does)
+    const bool menuGone = RaceMenuGoneCount() != goneAtStart;
+    const bool hudStarted = AiHudStartCount() != hudAtStart;
+    const bool introOver = menuGone || hudStarted || (race && GetTickCount64() - raceStartMs > 60000);
+    if (race && introOver && g_cfg.cockpit && !introLogged) {
+        introLogged = true;
+        Log("cockpit: %s: the cockpit seat is taken", menuGone ? "the race menu is gone" : hudStarted ? "the AI HUD has started" : "no sign of the countdown for a minute");
+    }
+    const bool put = g_cfg.cockpit && ChaseCameraHooked() && race && introOver && CarSeatDelta(seat, toSeat);
     for (int i = 0; i < 3; i++)
         g_vr.eyeCameraDelta[i] = put ? Multiply(toSeat, g_vr.trackedDelta[i]) : g_vr.trackedDelta[i];
     g_vr.seatActive = put;

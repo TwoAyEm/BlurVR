@@ -368,9 +368,14 @@ static RaceQuery g_raceQueries[48];
 static bool g_raceQueriesBroken = false;
 static unsigned long long g_raceFillLastMs = 0, g_raceFillSinceMs = 0;
 static bool g_raceMenuUp = false;
+static unsigned g_raceMenuGone = 0;
 bool RaceMenuOverlay()
 {
     return g_raceMenuUp;
+}
+unsigned RaceMenuGoneCount()
+{
+    return g_raceMenuGone;
 }
 void ReleaseRaceMenuQueries()
 {
@@ -471,6 +476,7 @@ void RaceMenuOverlayEndFrame()
         g_raceFillSinceMs = 0;
         if (g_raceMenuUp) {
             g_raceMenuUp = false;
+            g_raceMenuGone++;
             Log("race menu: gone");
         }
     }

@@ -13,6 +13,8 @@ void ApplyReflectionSwitch();
 // (an occlusion query around the real draw, flat; the HUD path's pause dim, VR), so it works with or without VR.  Used by the menu key repeat limiter
 // (input_limiter.cpp), which needs to know when the arrow keys navigate instead of steering.
 bool RaceMenuOverlay();
+// How many times the overlay has gone away since the game started: the cockpit view waits for the first one of a race (the intro's fill goes when the countdown starts).
+unsigned RaceMenuGoneCount();
 // Once per presented frame: pick up the finished queries and settle whether the overlay is up (a covering fill for 250 ms) or down (none for 150 ms).
 void RaceMenuOverlayEndFrame();
 // The occlusion queries are default-pool objects: released before a Reset.

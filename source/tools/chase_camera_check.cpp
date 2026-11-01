@@ -523,6 +523,25 @@ int main(int argc, char** argv)
         PutCar(1, 62, 0, 1);
         PutCar(2, 55, 0, 1.5);
         CHECK(FindBody(ahead, out) && g_playerCar == 0, "the moving player's car was not found (car %d)", g_playerCar);
+        // the same car number with another model in it (the next race, another car from the showroom): the key follows after a while, not at once
+        {
+            const float inertia = 900.0f, massA = 1300.0f, massB = 1750.0f;
+            memcpy(g_fakeBody[0] + 0x188, &inertia, 4);
+            memcpy(g_fakeBody[0] + 0x2A0, &massA, 4);
+            g_carKey = 0;
+            for (int i = 0; i < 100; i++)
+                FindBody(ahead, out);
+            const unsigned keyA = g_carKey;
+            CHECK(keyA != 0, "the first car's key was not made");
+            memcpy(g_fakeBody[0] + 0x2A0, &massB, 4);
+            for (int i = 0; i < 30; i++)
+                FindBody(ahead, out);
+            CHECK(g_carKey == keyA, "the key changed after a few frames of another mass");
+            for (int i = 0; i < 100; i++)
+                FindBody(ahead, out);
+            CHECK(g_carKey != 0 && g_carKey != keyA, "the key did not follow the new model (%08x, was %08x)", g_carKey, keyA);
+            puts("the car's key follows another model under the same car number");
+        }
         g_playerCar = -1;
         g_bodyResolved = false;
         memset(g_velocity, 0, sizeof(g_velocity));
