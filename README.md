@@ -1,4 +1,4 @@
-# BlurVR 1.8.1
+# BlurVR 1.8.2
 
 **Seated VR for Blur (SteamVR / OpenVR, or OpenXR).**
 
@@ -293,6 +293,12 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **To run the game flat,** set `Stereo=0` (SteamVR is not used; the `[Display]` and `[Input]` settings still apply), or `Enabled=0` (the mod does nothing), or run `uninstall.bat`.
 
 ## What is new
+
+### Version 1.8.2
+
+**Cockpit view on other builds of the game**
+
+- **The cockpit seat is now locked to the car on the 1.0 non-Steam build.** On that build the game's check for hidden cars is coded differently, and the lookup of the car's body gave up because of it, so the seat kept following the camera and drifted. That check is now optional. Not yet seen in the game on that build; if the seat still moves, send `BlurVR.log` (`Log=1`) with its `cockpit:` lines.
 
 ### Version 1.8.1
 

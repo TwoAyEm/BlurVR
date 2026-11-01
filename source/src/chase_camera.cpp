@@ -252,17 +252,17 @@ bool BytesAre(const BYTE* at, const char* hex)
 // wrong one shows as no car near the camera.
 bool ResolveBodyByScan(const BYTE* d)
 {
-    const BYTE *player = NULL, *hidden = NULL, *vehicle = NULL, *position = NULL, *orientation = NULL;
+    const BYTE *player = NULL, *vehicle = NULL, *position = NULL, *orientation = NULL;
     unsigned counts[5] = {};
     ScanPattern("A1 ?? ?? ?? ?? 85 C0 74 33 8B 80 90 0C 00 00 85 C0 74 29 83 78 50 00 74 23", player, counts[0]);
-    ScanPattern("8A 81 EB 03 00 00 C3", hidden, counts[1]);
+    counts[1] = 1; // (the flag of a hidden car is optional: its getter is not the same in every build)
     ScanPattern("8B 49 48 85 C9 75 05 33 C0 C2 04 00 E9 ?? ?? ?? ??", vehicle, counts[2]);
     ScanPattern("8B 44 24 04 D9 81 F4 02 00 00 D9 18 D9 81 F8 02 00 00 D9 58 04 D9 81 FC 02 00 00 D9 58 08 C2 04 00", position, counts[3]);
     ScanPattern("8B 44 24 04 D9 81 3C 02 00 00 D9 18 D9 81 40 02 00 00 D9 58 04 D9 81 44 02 00 00 D9 58 08 D9 81 48 02 00 00 D9 58 0C C2 04 00", orientation, counts[4]);
     if (counts[0] != 1 || counts[1] != 1 || counts[2] != 1 || counts[3] != 1) {
-        Log("cockpit: the car's body was not found by its own functions either (player %u, hidden %u, vehicle %u, position %u matches; orientation %u): the chase camera's "
+        Log("cockpit: the car's body was not found by its own functions either (player %u, vehicle %u, position %u matches; orientation %u): the chase camera's "
             "target is the car's place",
-            counts[0], counts[1], counts[2], counts[3], counts[4]);
+            counts[0], counts[2], counts[3], counts[4]);
         return false;
     }
     unsigned bodyOffset = 0x240;
@@ -275,7 +275,7 @@ bool ResolveBodyByScan(const BYTE* d)
         }
     }
     g_positionOffset = ReadU32(position + 6);
-    g_hiddenOffset = ReadU32(hidden + 2);
+    g_hiddenOffset = 0;
     g_bodyOffset = bodyOffset;
     g_orientationOffset = counts[4] == 1 ? ReadU32(orientation + 6) : 0;
     g_getPlayer = (GetPlayerFn)player;
@@ -302,10 +302,16 @@ bool ResolveBody()
     const BYTE* position = CallTarget(d + 0x46B); // call <position>(out): the body's position
     const bool bodyUse = BytesAre(d + 0x327, "83 BE 40 02 00 00 00") && BytesAre(d + 0x457, "8B 88 40 02 00 00");
     const bool playerOk = player && BytesAre(player, "A1 ?? ?? ?? ?? 85 C0 74 33 8B 80 90 0C 00 00");
-    const bool hiddenOk = hidden && BytesAre(hidden, "8A 81 EB 03 00 00 C3");
+    const bool hiddenOk = hidden && BytesAre(hidden, "8A 81 ?? ?? 00 00 C3") && ReadU32(hidden + 2) < 0x2000; // (optional: a build's getter can differ)
     const bool vehicleOk = vehicle && BytesAre(vehicle, "8B 49 48 85 C9");
     const bool positionOk = position && BytesAre(position, "8B 44 24 04 D9 81 ?? ?? 00 00 D9 18 D9 81 ?? ?? 00 00 D9 58 04 D9 81 ?? ?? 00 00 D9 58 08 C2 04 00");
-    if (!playerOk || !hiddenOk || !vehicleOk || !positionOk || !bodyUse) {
+    if (!hiddenOk && hidden) {
+        char hexText[3 * 16 + 1] = "";
+        for (int i = 0; i < 16; i++)
+            snprintf(hexText + 3 * i, 4, "%02X ", hidden[i]);
+        Log("cockpit: the AI HUD's hidden-car getter at %p is not the expected one (%s): hidden cars are not skipped", hidden, hexText);
+    }
+    if (!playerOk || !vehicleOk || !positionOk || !bodyUse) {
         Log("cockpit: the AI HUD's way to a car's position is not the expected one (player %s, hidden %s, vehicle %s, position %s, body use %s; update at %p): the chase "
             "camera's target is the car's place",
             playerOk ? "ok" : "no", hiddenOk ? "ok" : "no", vehicleOk ? "ok" : "no", positionOk ? "ok" : "no", bodyUse ? "ok" : "no", d);
@@ -336,9 +342,8 @@ bool ResolveBody()
     }
     g_positionOffset = ReadU32(position + 6);
     g_bodyOffset = ReadU32(d + 0x327 + 2);
-    g_hiddenOffset = ReadU32(hidden + 2);
-    if (ReadU32(position + 14) != g_positionOffset + 4 || ReadU32(position + 23) != g_positionOffset + 8 || g_bodyOffset > 0x2000 || g_positionOffset > 0x2000 ||
-        g_hiddenOffset > 0x2000) {
+    g_hiddenOffset = hiddenOk ? ReadU32(hidden + 2) : 0;
+    if (ReadU32(position + 14) != g_positionOffset + 4 || ReadU32(position + 23) != g_positionOffset + 8 || g_bodyOffset > 0x2000 || g_positionOffset > 0x2000) {
         Log("cockpit: the offsets in the AI HUD's way to a car's position are not the expected ones");
         if (ResolveBodyByScan(d))
             return true;
@@ -358,7 +363,7 @@ bool ResolveBody()
 bool BodyOfCar(int car, float* out, float* quat = NULL, bool* hasQuat = NULL)
 {
     void* record = g_getPlayer(car);
-    if (!record || *((const BYTE*)record + g_hiddenOffset))
+    if (!record || (g_hiddenOffset && *((const BYTE*)record + g_hiddenOffset)))
         return false;
     void* vehicle = g_getVehicle(record, car);
     if (!vehicle)
