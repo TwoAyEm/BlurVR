@@ -143,12 +143,13 @@ bool GetRaw(RawPose& out)
     return false;
 }
 
-// ---- finding the update
-bool FindUpdate(const BYTE*& found, unsigned& count)
+// ---- finding code by its bytes
+// Scans the executable sections for `pattern` (hex bytes, ?? = any); `found` is the first match, the result is true when there is exactly one.
+bool ScanPattern(const char* pattern, const BYTE*& found, unsigned& count)
 {
     unsigned char bytes[kMaxPattern], mask[kMaxPattern];
     size_t length = 0;
-    for (const char* p = kUpdatePattern; *p && length < kMaxPattern;) {
+    for (const char* p = pattern; *p && length < kMaxPattern;) {
         if (*p == ' ') {
             p++;
             continue;
@@ -166,7 +167,7 @@ bool FindUpdate(const BYTE*& found, unsigned& count)
     found = NULL;
     count = 0;
     BYTE* base = (BYTE*)GetModuleHandleA(NULL);
-    if (!base)
+    if (!base || !length)
         return false;
     IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew);
     IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(nt);
@@ -188,6 +189,11 @@ bool FindUpdate(const BYTE*& found, unsigned& count)
         }
     }
     return count == 1;
+}
+
+bool FindUpdate(const BYTE*& found, unsigned& count)
+{
+    return ScanPattern(kUpdatePattern, found, count);
 }
 
 // ---- the car the game draws
@@ -240,12 +246,56 @@ bool BytesAre(const BYTE* at, const char* hex)
     return true;
 }
 
+// The same chain without the AI HUD: each function is found by its own bytes (every one matches once in the Steam build, and the offsets are part of the patterns).  Used
+// when the AI HUD's update was not found in this build or is not laid out as in the Steam build (a build whose code is moved about: the cockpit seat then followed the
+// chase camera's target, which sways against the car).  The body pointer's offset in the vehicle is only in the AI HUD's code; without it the Steam build's is tried, and a
+// wrong one shows as no car near the camera.
+bool ResolveBodyByScan(const BYTE* d)
+{
+    const BYTE *player = NULL, *hidden = NULL, *vehicle = NULL, *position = NULL, *orientation = NULL;
+    unsigned counts[5] = {};
+    ScanPattern("A1 ?? ?? ?? ?? 85 C0 74 33 8B 80 90 0C 00 00 85 C0 74 29 83 78 50 00 74 23", player, counts[0]);
+    ScanPattern("8A 81 EB 03 00 00 C3", hidden, counts[1]);
+    ScanPattern("8B 49 48 85 C9 75 05 33 C0 C2 04 00 E9 ?? ?? ?? ??", vehicle, counts[2]);
+    ScanPattern("8B 44 24 04 D9 81 F4 02 00 00 D9 18 D9 81 F8 02 00 00 D9 58 04 D9 81 FC 02 00 00 D9 58 08 C2 04 00", position, counts[3]);
+    ScanPattern("8B 44 24 04 D9 81 3C 02 00 00 D9 18 D9 81 40 02 00 00 D9 58 04 D9 81 44 02 00 00 D9 58 08 D9 81 48 02 00 00 D9 58 0C C2 04 00", orientation, counts[4]);
+    if (counts[0] != 1 || counts[1] != 1 || counts[2] != 1 || counts[3] != 1) {
+        Log("cockpit: the car's body was not found by its own functions either (player %u, hidden %u, vehicle %u, position %u matches; orientation %u): the chase camera's "
+            "target is the car's place",
+            counts[0], counts[1], counts[2], counts[3], counts[4]);
+        return false;
+    }
+    unsigned bodyOffset = 0x240;
+    if (d) { // (the vehicle's body is tested against zero by the AI HUD: cmp [esi+offset],0)
+        for (size_t i = 0; i < 0x800; i++) {
+            if (d[i] == 0x83 && d[i + 1] == 0xBE && d[i + 4] == 0 && d[i + 5] == 0 && d[i + 6] == 0 && ReadU32(d + i + 2) < 0x2000 && ReadU32(d + i + 2) > 0x100) {
+                bodyOffset = ReadU32(d + i + 2);
+                break;
+            }
+        }
+    }
+    g_positionOffset = ReadU32(position + 6);
+    g_hiddenOffset = ReadU32(hidden + 2);
+    g_bodyOffset = bodyOffset;
+    g_orientationOffset = counts[4] == 1 ? ReadU32(orientation + 6) : 0;
+    g_getPlayer = (GetPlayerFn)player;
+    g_getVehicle = (GetVehicleFn)vehicle;
+    g_bodyResolved = true;
+    Log("cockpit: cars are found by their own functions (the AI HUD's way was not usable): player %p, vehicle %p, body at +0x%x, position at +0x%x, orientation %s", player, vehicle,
+        g_bodyOffset, g_positionOffset, g_orientationOffset ? "found" : "not found");
+    return true;
+}
+
 bool ResolveBody()
 {
     // (the update was found by ai_hud.cpp, which has put its own jump over the first bytes: a scan for the function would find nothing)
     const BYTE* d = AiHudUpdateStart();
-    if (!d)
-        return false;
+    if (!d) {
+        static unsigned scans = 0;
+        if (scans++ == 0)
+            Log("cockpit: the AI HUD's update is not known (yet): the car's functions are looked for by their bytes");
+        return ResolveBodyByScan(NULL);
+    }
     const BYTE* player = CallTarget(d + 0x2EC);   // call <player>(car number)
     const BYTE* hidden = CallTarget(d + 0x304);   // call <hidden>(record): mov al,[ecx+0x3EB] / ret
     const BYTE* vehicle = CallTarget(d + 0x314);  // call <vehicle>(record, car number)
@@ -259,6 +309,8 @@ bool ResolveBody()
         Log("cockpit: the AI HUD's way to a car's position is not the expected one (player %s, hidden %s, vehicle %s, position %s, body use %s; update at %p): the chase "
             "camera's target is the car's place",
             playerOk ? "ok" : "no", hiddenOk ? "ok" : "no", vehicleOk ? "ok" : "no", positionOk ? "ok" : "no", bodyUse ? "ok" : "no", d);
+        if (ResolveBodyByScan(d))
+            return true;
         if (d) {
             char hexText[3 * 16 + 1] = "";
             const BYTE* places[4] = {d + 0x327, d + 0x457, player, position};
@@ -287,7 +339,9 @@ bool ResolveBody()
     g_hiddenOffset = ReadU32(hidden + 2);
     if (ReadU32(position + 14) != g_positionOffset + 4 || ReadU32(position + 23) != g_positionOffset + 8 || g_bodyOffset > 0x2000 || g_positionOffset > 0x2000 ||
         g_hiddenOffset > 0x2000) {
-        Log("cockpit: the offsets in the AI HUD's way to a car's position are not the expected ones: the chase camera's target is the car's place");
+        Log("cockpit: the offsets in the AI HUD's way to a car's position are not the expected ones");
+        if (ResolveBodyByScan(d))
+            return true;
         return true;
     }
     g_getPlayer = (GetPlayerFn)player;
