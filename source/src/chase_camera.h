@@ -7,6 +7,10 @@
 
 // Called once per presented frame.  With the cockpit view wanted (and VR running) it looks for the chase camera's update in Blur.exe by its bytes and hooks it.
 void ChaseCameraPoll();
+// The speed of the car the chase camera follows in metres a second (0 while the chase camera is not the one updating); the cockpit seat is also taken once the car moves.
+double ChaseCameraSpeed();
+// The speed of the car the chase camera follows in metres a second (0 while the chase camera is not the one updating); the cockpit seat is also taken once the car moves.
+double ChaseCameraSpeed();
 // True once the update is hooked: the cockpit seat is then placed in the car's frame (CarSeatDelta); where it is not (another build) the cockpit falls back to a
 // fixed offset from the chase camera.
 bool ChaseCameraHooked();

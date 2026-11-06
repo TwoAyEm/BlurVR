@@ -77,6 +77,7 @@ struct Config {
     double cullMarginDeg = 6.0, cullPullBack = 0.3; // [Culling] MarginDeg (added to every side) and PullBack (metres the frustum's apex is moved back) of the frustum around the head that the game culls with in VR, game_camera.cpp
     int cockpit = 0; // [VR] CockpitView: 1 = in a race the eyes sit at the driver's seat instead of at the chase camera (vr_runtime.cpp, VrUpdatePose); the key below flips it live
     double carSeatX = -0.35, carSeatY = 0.8, carSeatZ = -0.1; // [VR] CarSeatX / CarSeatY / CarSeatZ: the seat in the car's frame (chase_camera.cpp), metres from the point the chase camera follows
+    double carSeatStep = 0.02; // [VR] CarSeatStep: metres the seat moves for one press of a numpad key (and for every repeat while the key is held)
     int carSeatBody = 1; // [VR] CarSeatBody: 1 = the seat is placed on the body of the car as the game's AI HUD finds it; 0 = on the chase camera's target
     int cockpitDriver = 0; // [VR] CockpitDriver: 1 = the driver model is drawn in the cockpit view, 0 = hidden (its animation moves against the car, and the head is inside it)
     double cockpitHudDistance = 1.2, cockpitHudScale = 0.6, cockpitHudOffsetY = 0.0; // [VR] CockpitHudDistance / CockpitHudScale / CockpitHudOffsetY: the HUD while the cockpit seat is on (like [Hud] Distance / Scale / OffsetY, in front of the seat)

@@ -655,10 +655,13 @@ void VrComposeSeat()
     // (the intro of some races has no fill that is recognised as the race menu; the AI HUD starts updating when the countdown does)
     const bool menuGone = RaceMenuGoneCount() != goneAtStart;
     const bool hudStarted = AiHudStartCount() != hudAtStart;
-    const bool introOver = menuGone || hudStarted || (race && GetTickCount64() - raceStartMs > 60000);
+    // (a car that is moving fast is not in the countdown: the seat is taken then even if neither of the two signs was seen)
+    const bool moving = race && g_cfg.cockpit && ChaseCameraSpeed() > 5.0;
+    const bool introOver = menuGone || hudStarted || moving || (race && GetTickCount64() - raceStartMs > 60000);
     if (race && introOver && g_cfg.cockpit && !introLogged) {
         introLogged = true;
-        Log("cockpit: %s: the cockpit seat is taken", menuGone ? "the race menu is gone" : hudStarted ? "the AI HUD has started" : "no sign of the countdown for a minute");
+        Log("cockpit: %s: the cockpit seat is taken (%.1f s after the race began)", menuGone ? "the race menu is gone" : hudStarted ? "the AI HUD has started" : moving ? "the car is moving" : "no sign of the countdown for a minute",
+            (double)(GetTickCount64() - raceStartMs) / 1000.0);
     }
     const bool put = g_cfg.cockpit && ChaseCameraHooked() && race && introOver && CarSeatDelta(seat, toSeat);
     for (int i = 0; i < 3; i++)
@@ -746,38 +749,48 @@ static void PollCockpitKeys()
     bool toggleDown = g_cfg.keyCockpit && (GetAsyncKeyState(g_cfg.keyCockpit) & 0x8000) != 0;
     if (toggleDown && !toggleWasDown && g_cfg.vr) {
         g_cfg.cockpit = g_cfg.cockpit ? 0 : 1;
-        Log("switch: cockpit view = %d (seat %.2f %.2f %.2f)", g_cfg.cockpit, g_cfg.carSeatX, g_cfg.carSeatY, g_cfg.carSeatZ);
+        Log("switch: cockpit view = %d (seat %.3f %.3f %.3f)", g_cfg.cockpit, g_cfg.carSeatX, g_cfg.carSeatY, g_cfg.carSeatZ);
     }
     toggleWasDown = toggleDown;
     static bool dirty = false;
-    static DWORD lastStep = 0;
+    static ULONGLONG heldSince[6] = {}, lastRepeat[6] = {};
     if (g_cfg.cockpit && ChaseCameraHooked() && IsRaceMode() && !InMenuScene()) {
         double* const seatY = &g_cfg.carSeatY;
         double* const seatZ = &g_cfg.carSeatZ;
+        const double step = g_cfg.carSeatStep;
         struct Nudge {
             int key;
             double* value;
             double step;
-        } nudges[6] = {{VK_ADD, seatZ, 0.05}, {VK_SUBTRACT, seatZ, -0.05}, {VK_MULTIPLY, seatY, 0.05}, {VK_DIVIDE, seatY, -0.05},
-                       {VK_NUMPAD3, &g_cfg.carSeatX, 0.05}, {VK_NUMPAD1, &g_cfg.carSeatX, -0.05}};
-        const DWORD now = GetTickCount();
+        } nudges[6] = {{VK_ADD, seatZ, step}, {VK_SUBTRACT, seatZ, -step}, {VK_MULTIPLY, seatY, step}, {VK_DIVIDE, seatY, -step},
+                       {VK_NUMPAD3, &g_cfg.carSeatX, step}, {VK_NUMPAD1, &g_cfg.carSeatX, -step}};
+        // (one press is one step; a key held for a third of a second then repeats every 80 ms)
+        const ULONGLONG now = GetTickCount64();
         bool any = false;
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < 6; i++) {
             if (GetAsyncKeyState(nudges[i].key) & 0x8000) {
                 any = true;
-                if (now - lastStep >= 80)
+                if (!heldSince[i]) {
+                    heldSince[i] = lastRepeat[i] = now;
                     *nudges[i].value += nudges[i].step;
+                } else if (now - heldSince[i] >= 350 && now - lastRepeat[i] >= 80) {
+                    lastRepeat[i] = now;
+                    *nudges[i].value += nudges[i].step;
+                }
+            } else {
+                heldSince[i] = 0;
             }
+        }
         if (any) {
-            if (now - lastStep >= 80)
-                lastStep = now;
             dirty = true;
             return;
         }
+    } else {
+        memset(heldSince, 0, sizeof(heldSince));
     }
     if (dirty) { // (the keys are up)
         dirty = false;
-        Log("cockpit seat (in the car's frame): %.2f %.2f %.2f", g_cfg.carSeatX, g_cfg.carSeatY, g_cfg.carSeatZ);
+        Log("cockpit seat (in the car's frame): %.3f %.3f %.3f", g_cfg.carSeatX, g_cfg.carSeatY, g_cfg.carSeatZ);
         if (ChaseCameraSaveSeat())
             return; // (kept for this car in BlurVR_seats.ini: the seat of BlurVR.ini stays the default for cars that have none)
         const std::string ini = std::string(g_modDir) + "BlurVR.ini";
@@ -785,7 +798,7 @@ static void PollCockpitKeys()
         const double values[3] = {g_cfg.carSeatX, g_cfg.carSeatY, g_cfg.carSeatZ};
         for (int i = 0; i < 3; i++) {
             char text[32];
-            snprintf(text, sizeof(text), "%.2f", values[i]);
+            snprintf(text, sizeof(text), "%.3f", values[i]);
             WritePrivateProfileStringA("VR", names[i], text, ini.c_str());
         }
     }

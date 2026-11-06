@@ -172,6 +172,11 @@ void LoadConfig()
     g_cfg.carSeatX = ReadIniDouble("VR", "CarSeatX", -0.35);
     g_cfg.carSeatY = ReadIniDouble("VR", "CarSeatY", 0.8);
     g_cfg.carSeatZ = ReadIniDouble("VR", "CarSeatZ", -0.1);
+    g_cfg.carSeatStep = ReadIniDouble("VR", "CarSeatStep", 0.02);
+    if (g_cfg.carSeatStep < 0.001)
+        g_cfg.carSeatStep = 0.001;
+    if (g_cfg.carSeatStep > 0.5)
+        g_cfg.carSeatStep = 0.5;
     g_cfg.carSeatBody = ReadIniInt("VR", "CarSeatBody", 1);
     g_cfg.cockpitHudDistance = ReadIniDouble("VR", "CockpitHudDistance", 1.2);
     g_cfg.cockpitHudScale = ReadIniDouble("VR", "CockpitHudScale", 0.6);

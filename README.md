@@ -79,7 +79,7 @@ Off by default. Set `CockpitView=1` under `[VR]` in `BlurVR.ini`, or press **Num
 - **It starts when the race does.** In a race the game's own camera shows the intro first; the cockpit seat is taken when the countdown starts (the `race menu: gone` line in `BlurVR.log`, or the markers over the AI cars starting; a minute into the race at the latest).
 - **The driver is hidden.** His animation moves against the car and your head is inside him. `CockpitDriver=1` shows him again.
 - **The HUD** (position, map, weapons) and the rear-view mirror sit in front of the seat, in the car: `CockpitHudDistance`, `CockpitHudScale` and `CockpitHudOffsetY` under `[VR]` set where and how big.
-- **The seat's place** starts at `CarSeatX`, `CarSeatY` and `CarSeatZ` under `[VR]` (metres right, up and forward of the point the chase camera follows). In a race with the cockpit view on, **Num+ / Num-** move it forward / back, **Num\* / Num/** up / down and **Num3 / Num1** right / left, 5 cm a step while the key is held. When you let go the place is kept for the car you are driving (in `BlurVR_seats.ini`) and used again every time you drive that car; a car without a kept place starts at the `CarSeat` values. Cars are told apart by the weight and inertia the game holds for them.
+- **The seat's place** starts at `CarSeatX`, `CarSeatY` and `CarSeatZ` under `[VR]` (metres right, up and forward of the point the chase camera follows). In a race with the cockpit view on, **Num+ / Num-** move it forward / back, **Num\* / Num/** up / down and **Num3 / Num1** right / left. A press moves it one step (`CarSeatStep` under `[VR]`, 2 cm by default), and a key held down repeats after a third of a second. When you let go the place is kept for the car you are driving (in `BlurVR_seats.ini`) and used again every time you drive that car; a car without a kept place starts at the `CarSeat` values. Cars are told apart by the weight and inertia the game holds for them.
 - The cockpit view needs the game's chase camera code to be found in your `Blur.exe`. It was tried on the Steam build; 1.8.1 and 1.8.2 changed how the car is found so that non-Steam builds should work too, which has not been seen in the game yet. On a build where it is not found the cockpit view is not available and the game keeps its normal camera (see [Troubleshooting](#troubleshooting)). The cockpit view has been confirmed working with Virtual Desktop's OpenXR runtime (VDXR) on a Quest 3, as well as with SteamVR on a Valve Index. It works only while the chase camera is the one in use: with the bumper camera or in a replay the view stays where the game's camera is.
 
 ## Keys
@@ -172,6 +172,7 @@ Blur counts how long a key is held in frames and, after a second, repeats it eve
 | `DesktopPresentEvery` | `1` | In a race, the window on the desktop (a mirror of the headset) really updates only every n-th frame (2-4 saves a little GPU time; 1 = every frame) |
 | `FitDesktopWindow` | `1` | 1 = the game's window is never made bigger than the work area of its monitor (at a 3840x2160 setting it would cover the whole desktop, or two monitors). The game still renders at the size it chose; the window shows one eye's view of it scaled to fit (`DesktopView`). Windowed mode only. 0 = as the game wants. |
 | `CockpitView` | `0` | 1 = cockpit view: in a race your head sits in the driver's seat, fixed to the car (see [Cockpit view](#cockpit-view)). **Num0** switches it in game. |
+| `CarSeatStep` | `0.02` | How far one press of a seat key moves the seat, in metres (0.001 to 0.5). A held key repeats after a third of a second |
 | `CarSeatX`, `CarSeatY`, `CarSeatZ` | `-0.35`, `0.8`, `-0.1` | The seat's place in the car, metres right, up and forward of the point the chase camera follows. The place you set in game with the numpad is kept for each car and used instead (`BlurVR_seats.ini`); these are the start for a car without one. |
 | `CockpitHudDistance`, `CockpitHudScale`, `CockpitHudOffsetY` | `1.2`, `0.6`, `0` | The HUD and the rear-view mirror with the cockpit view on: their distance in front of the seat in metres, their size (a fraction of one eye's width) and their height. They take the place of `Distance`, `Scale` and `OffsetY` under `[Hud]` in the cockpit view. |
 | `CockpitDriver` | `0` | 1 = the driver model is drawn in the cockpit view. 0 = hidden: his animation moves against the car and your head is inside him. |
@@ -309,6 +310,11 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **No empty unlock screen and no "new unlock" notice** for a level above 25 (it unlocks nothing). The fan screen goes back to the menu after the stamp.
 - **The green "New items unlocked" bar** has nothing to announce above level 25, so it shows a short tongue-in-cheek line instead ("What, you want a medal?", "Nothing left to unlock", ...).
 - Single player, flat and in VR. Tried on the Steam build; the non-Steam build is not tried.
+
+**Cockpit view**
+
+- **Finer seat adjustment.** The seat keys (Num+ / Num-, Num\* / Num/, Num3 / Num1) move the seat by `CarSeatStep` under `[VR]` for each press, 2 cm by default (it was 5 cm, and a quick tap often gave two steps). A key held down starts repeating after a third of a second. Set `CarSeatStep` to 0.01 or 0.005 for the finest adjustment. The seat is kept for each car with three decimals.
+- **The cockpit seat is taken once the car moves**, as well as when the countdown is seen to end. In the first race after the game started the seat could wait up to a minute (the signs of the countdown are easy to miss there) and only then appear.
 
 ### Version 1.8.3
 

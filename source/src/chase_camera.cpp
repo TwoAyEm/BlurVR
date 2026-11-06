@@ -660,6 +660,11 @@ bool ChaseCameraHooked()
     return g_hooked;
 }
 
+double ChaseCameraSpeed()
+{
+    return g_hooked ? sqrt(Dot(g_velocity, g_velocity)) : 0.0;
+}
+
 // ---- the seat saved per car
 // BlurVR_seats.ini keeps one section per car key ([car_xxxxxxxx], X / Y / Z); a car that has none uses the seat of BlurVR.ini ([VR] CarSeatX / Y / Z).
 static std::string SeatsPath()
@@ -738,10 +743,10 @@ bool ChaseCameraSaveSeat()
     const char* names[3] = {"X", "Y", "Z"};
     const double values[3] = {g_cfg.carSeatX, g_cfg.carSeatY, g_cfg.carSeatZ};
     for (int i = 0; i < 3; i++) {
-        snprintf(text, sizeof(text), "%.2f", values[i]);
+        snprintf(text, sizeof(text), "%.3f", values[i]);
         WritePrivateProfileStringA(section, names[i], text, SeatsPath().c_str());
     }
-    Log("cockpit: the seat %.2f %.2f %.2f is kept for car %08x", values[0], values[1], values[2], g_carKey);
+    Log("cockpit: the seat %.3f %.3f %.3f is kept for car %08x", values[0], values[1], values[2], g_carKey);
     return true;
 }
 
