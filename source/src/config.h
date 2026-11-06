@@ -81,6 +81,10 @@ struct Config {
     int cockpitDriver = 0; // [VR] CockpitDriver: 1 = the driver model is drawn in the cockpit view, 0 = hidden (its animation moves against the car, and the head is inside it)
     double cockpitHudDistance = 1.2, cockpitHudScale = 0.6, cockpitHudOffsetY = 0.0; // [VR] CockpitHudDistance / CockpitHudScale / CockpitHudOffsetY: the HUD while the cockpit seat is on (like [Hud] Distance / Scale / OffsetY, in front of the seat)
     int keyCockpit = 0x60; // [Debug] KeyCockpit, numpad 0
+    int fanMaxLevel = 250;                         // [Fans] MaxLevel: the highest fan status level (fan_levels.cpp); 25 or less leaves the game's own table
+    int fanLevelUpMessages = 1;                    // [Fans] LevelUpMessages: 1 = a level above 25 shows a message in the green bar of the fan screen (the game's "New items unlocked"); 0 = it is left empty
+    int fanTraceScripts = 0;                        // [Fans] TraceScripts (needs Log=1): log the calls the game's scripts make to its rank and unlock functions (debugging)
+    int fanHideRankUnlock = 1;                      // [Fans] HideRankUnlock: 1 = a level above 25 adds no unlock entry and sets no "ranked up" flag, so the unlock screen is not shown for it (NOTES section 31)
     int foveationReport = 1; // [Foveation] Report: at VR start, log how much of each eye's image the lenses can show (lens_model.cpp)
 };
 

@@ -5,6 +5,7 @@
 #include "core.h"
 #include "d3d_hooks.h"
 #include "display_modes.h"
+#include "fan_levels.h"
 #include "game_mode.h"
 #include "input_limiter.h"
 #include "perf_probe.h"
@@ -27,6 +28,7 @@ IDirect3D9* WINAPI Direct3DCreate9(UINT sdk)
     if (!hooked) {
         hooked = true;
         InstallFileOpenHooks();
+        StartFanLevels();
     }
     IDirect3D9* d3d = NULL;
     if (g_cfg.vr && g_cfg.sharedTransport) {
