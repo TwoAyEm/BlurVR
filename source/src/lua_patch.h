@@ -1,4 +1,4 @@
-// A patch of the game's fan screen script for levels past 25 ([Fans] HideRankUnlock, NOTES.md section 31), made as the game's Lua loads it.
+// A patch of the game's fan screen script for levels past 25 (NOTES.md section 31), made as the game's Lua loads it.
 #pragma once
 #include "common.h"
 

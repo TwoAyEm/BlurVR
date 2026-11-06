@@ -144,11 +144,11 @@ bool FansAboveStockLevels()
 
 const wchar_t* __fastcall H_GetText(void* self, void* edx, unsigned hash)
 {
-    if (hash == kNoticeTextId && g_cfg.fanHideRankUnlock && FansAboveStockLevels()) {
+    if (hash == kNoticeTextId && FansAboveStockLevels()) {
         static unsigned blanked = 0;
         if (blanked++ < 4)
             Log("fan levels: the text \"New items unlocked\" is replaced (fans above level 25)");
-        return g_cfg.fanLevelUpMessages ? LevelUpMessage() : g_emptyText;
+        return LevelUpMessage();
     }
     unsigned level = hash - kNameBase;
     if (level < (unsigned)kNameLevels && g_templateHash) {
@@ -797,11 +797,11 @@ void TryHooks()
         keyHooked = InstallKeyHook();
     if (!uiTextHooked && g_origGetText)
         uiTextHooked = InstallUITextHook();
-    if (!luaPatched && g_cfg.fanHideRankUnlock)
+    if (!luaPatched)
         luaPatched = InstallLuaChunkPatch();
-    if (!unlockPatched && g_cfg.fanHideRankUnlock)
+    if (!unlockPatched)
         unlockPatched = InstallUnlockSuppress();
-    if (!collectLogged && g_cfg.fanHideRankUnlock)
+    if (!collectLogged)
         collectLogged = InstallCollectLog();
     if (!traced && g_logEnabled && g_cfg.fanTraceScripts && rounds >= 3) // (the script tables are set up by then)
         traced = InstallLuaTrace();

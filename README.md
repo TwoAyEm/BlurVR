@@ -246,9 +246,7 @@ The game decides what to draw from a view frustum around your head (both eyes' f
 
 | Key | Default | What it does |
 |---|---|---|
-| `MaxLevel` | `250` | The fan status goes up to this level (the game stops at 25; the highest value is 999). 25 or less keeps the game's own table. Each level above 25 needs 1,000 fans more than the step before it: level 26 needs 183,600 fans, level 100 3,942,800, level 250 28,362,800. Levels above 25 have no unlocks. Works flat and in VR |
-| `HideRankUnlock` | `1` | A level above 25 has no unlock to show, so the "new unlock" notice and the empty unlock screen are skipped for it. 0 = the game shows them |
-| `LevelUpMessages` | `1` | The green bar on the fan screen that says "New items unlocked" has nothing to announce for a level above 25, so it shows a short tongue-in-cheek line instead ("What, you want a medal?", "Nothing left to unlock", ...). 0 = the bar stays empty |
+| `MaxLevel` | `250` | The fan status goes up to this level (the game stops at 25; the highest value is 999). 25 or less keeps the game's own table. Each level above 25 needs 1,000 fans more than the step before it: level 26 needs 183,600 fans, level 100 3,942,800, level 250 28,362,800. Levels above 25 have no unlocks, so the "new unlock" notice and the empty unlock screen are left out for them, and the green "New items unlocked" bar on the fan screen shows a short tongue-in-cheek line instead. Works flat and in VR |
 
 ### `[Foveation]`
 
@@ -309,7 +307,7 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **The fan status goes up to level 250** (`MaxLevel` under `[Fans]`; the game stops at level 25). The fans a level needs grow by 1,000 with every level: level 26 needs 183,600 fans, level 100 about 3.9 million and level 250 about 28.4 million. The levels are kept in your save as before; with the mod off you are level 25.
 - **The "Fan Status N" stamp** on the fan screen after a race shows the right level for every level, in every language.
 - **No empty unlock screen and no "new unlock" notice** for a level above 25 (it unlocks nothing). The fan screen goes back to the menu after the stamp.
-- **The green "New items unlocked" bar** has nothing to announce above level 25, so it shows a short tongue-in-cheek line instead ("What, you want a medal?", "Nothing left to unlock", ...). `LevelUpMessages=0` leaves the bar empty, `HideRankUnlock=0` gives the game's own behaviour back.
+- **The green "New items unlocked" bar** has nothing to announce above level 25, so it shows a short tongue-in-cheek line instead ("What, you want a medal?", "Nothing left to unlock", ...).
 - Single player, flat and in VR. Tried on the Steam build; the non-Steam build is not tried.
 
 ### Version 1.8.3

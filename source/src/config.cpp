@@ -180,8 +180,6 @@ void LoadConfig()
     g_cfg.keyCockpit = ReadIniInt("Debug", "KeyCockpit", 0x60);
     g_cfg.fanMaxLevel = ReadIniInt("Fans", "MaxLevel", 250);
     g_cfg.fanTraceScripts = ReadIniInt("Fans", "TraceScripts", 0);
-    g_cfg.fanLevelUpMessages = ReadIniInt("Fans", "LevelUpMessages", 1);
-    g_cfg.fanHideRankUnlock = ReadIniInt("Fans", "HideRankUnlock", 1);
     if (g_cfg.fanMaxLevel > 999)
         g_cfg.fanMaxLevel = 999;
     g_cfg.cullMarginDeg = ReadIniDouble("Culling", "MarginDeg", 6.0);
