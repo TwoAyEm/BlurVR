@@ -177,6 +177,9 @@ Blur counts how long a key is held in frames and, after a second, repeats it eve
 | `CockpitHudDistance`, `CockpitHudScale`, `CockpitHudOffsetY` | `1.2`, `0.6`, `0` | The HUD and the rear-view mirror with the cockpit view on: their distance in front of the seat in metres, their size (a fraction of one eye's width) and their height. They take the place of `Distance`, `Scale` and `OffsetY` under `[Hud]` in the cockpit view. |
 | `CockpitDriver` | `0` | 1 = the driver model is drawn in the cockpit view. 0 = hidden: his animation moves against the car and your head is inside him. |
 | `FpsCounter` | `0` | 1 = a small panel in the headset shows how many frames a second the game presents (in races and in the showroom; **Num9** switches it in game), with a graph of the last 18 seconds under it. It stays in front of your face, a little to the lower left, and is green at the headset's refresh rate, yellow below it and red far below (a game that SteamVR holds to half the headset's rate shows red; with `Api=openxr` the rate is the one the OpenXR runtime reports for its display). The line of the graph has the same colours and is scaled from the lowest to the highest rate of those seconds. Off by default |
+| `Upscale` | `0` | 1 = the game renders at `Resolution` and the headset gets a picture `UpscaleFactor` times as large, upscaled on the GPU (AMD FidelityFX Super Resolution 1.0 and a sharpening). Races only. It pays where the graphics card is the limit: if lowering `Resolution` does not raise the frame rate, the processor is the limit and this will not help |
+| `UpscaleFactor` | `1.5` | How many times as wide and high the headset picture is, 1 to 4. With `Resolution=2688x1512` and `1.333` the headset gets 3584x2016 |
+| `UpscaleSharpness` | `0.75` | The sharpening after the upscale: 0 = none, 1 = the strongest |
 
 ### `[Render]`  (VR only)
 

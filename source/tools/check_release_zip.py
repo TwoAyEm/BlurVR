@@ -12,7 +12,7 @@ import sys
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EXPECTED = {'BlurVR.ini', 'LICENSE_openvr.txt', 'LICENSE_openxr.txt', 'README.md', 'd3d9.dll', 'install.bat', 'openvr_api.dll', 'openxr_loader.dll',
+EXPECTED = {'BlurVR.ini', 'LICENSE_openvr.txt', 'LICENSE_fsr.txt', 'LICENSE_openxr.txt', 'README.md', 'd3d9.dll', 'install.bat', 'openvr_api.dll', 'openxr_loader.dll',
             'uninstall.bat'}
 SOURCE_EXT = {'.cpp', '.c', '.h', '.hpp', '.py', '.def', '.md', '.patch', '.sh', '.clang-format', '.obj', '.lib', '.pdb'}
 

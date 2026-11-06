@@ -65,6 +65,9 @@ struct Config {
     int skipReflections = 0; // [VR] Reflections=0 sets it: the game's planar reflection pass (the water of a race) is left out, in races only (draw_dispatch.cpp: ApplyReflectionSwitch)
     int fpsCounter = 0;   // [VR] FpsCounter: 1 = a small panel in the headset shows the frames a second the game presents (fps_counter.cpp); the key below flips it live
     int keyFps = 0x69;    // [Debug] KeyFps, numpad 9
+    int upscale = 0;                 // [VR] Upscale: 1 = the game renders at [VR] Resolution and the headset gets a larger picture, made on the Direct3D 11 side (upscale_d3d11.cpp)
+    double upscaleFactor = 1.5;      // [VR] UpscaleFactor: the headset picture is this many times as wide and high as the game's (1 to 4)
+    double upscaleSharpness = 0.75;  // [VR] UpscaleSharpness: 0 = no sharpening after the upscale, 1 = the strongest
     int sharedTransport = 1; // [VR] SharedTransport (VR only, on by default; falls back to the CPU copy by itself if it cannot work): 1 = run the game on a Direct3D 9Ex device and hand the finished frame to SteamVR as a shared texture (no read back through the CPU)
     int startAtSavedSize = 0; // VR only (set by LoadConfig): a windowed start that Windows clamped to the desktop gets the start size as its back buffer (display_modes.cpp, window_spoof.cpp)
     int startWidth = 0, startHeight = 0; // VR only (set by LoadConfig): the size the start should have, the VR resolution

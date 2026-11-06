@@ -1,5 +1,6 @@
 // OpenVR / SteamVR session: initialisation, head pose, per-eye camera deltas, floating menu screen, and submitting the finished frame to the compositor.
 // With [VR] Api=openxr the runtime calls go through openxr_runtime.cpp instead; the maths and the game side are the same.
+#include "upscale_d3d11.h"
 #include "vr_runtime.h"
 #include "chase_camera.h"
 #include "config.h"
@@ -719,10 +720,10 @@ static void PlaceMenuOverlay()
 }
 // Api=openxr: the finished picture to the headset (openxr_runtime.cpp): a race frame as a projection layer, anything else on the floating
 // menu screen, which is a quad layer placed the same way as the OpenVR overlay.
-static void SubmitFrameOpenXr(bool sceneFrame, bool sharedCopied, UINT width, UINT height)
+static void SubmitFrameOpenXr(bool sceneFrame, ID3D11Texture2D* scenePicture, UINT width, UINT height)
 {
     if (sceneFrame) {
-        XrRuntimeSubmitScene(sharedCopied ? g_vr.sharedTexture11 : g_vr.frameTexture, width, height);
+        XrRuntimeSubmitScene(scenePicture, width, height);
         return;
     }
     static HmdMatrix34_t menuPose;
@@ -1030,9 +1031,26 @@ static void SubmitFrameBody(IDirect3DDevice9* device)
     }
     backBuffer->Release();
 
+    // the race picture the runtime gets: the game's own, or (the Direct3D 11 side, [VR] Upscale) a larger one made from it
+    ID3D11Texture2D* picture = sharedCopied ? g_vr.sharedTexture11 : g_vr.frameTexture;
+    UINT pictureWidth = desc.Width, pictureHeight = desc.Height;
+    if (copied && g_cfg.upscale && g_cfg.stereo && inRace && g_sceneDrawsThisFrame > 0) {
+        UINT upWidth = 0, upHeight = 0;
+        UpscaleOutputSize(desc.Width, desc.Height, g_cfg.upscaleFactor, &upWidth, &upHeight);
+        PerfScope perfUpscale(PS_SUBMIT);
+        ID3D11Texture2D* upscaled = UpscaleFrame(g_vr.d3d11Device, g_vr.d3d11Context, picture, desc.Width, desc.Height, upWidth, upHeight, g_cfg.upscaleSharpness);
+        if (upscaled) {
+            picture = upscaled;
+            pictureWidth = upWidth;
+            pictureHeight = upHeight;
+            if (g_cfg.vrApi != kVrApiOpenXr)
+                g_vr.d3d11Context->Flush();
+        }
+    }
+
     if (copied && g_cfg.vrApi == kVrApiOpenXr) {
         PerfScope perfSubmit(PS_SUBMIT);
-        SubmitFrameOpenXr(inRace && g_sceneDrawsThisFrame > 0, sharedCopied, desc.Width, desc.Height);
+        SubmitFrameOpenXr(inRace && g_sceneDrawsThisFrame > 0, picture, pictureWidth, pictureHeight);
     } else if (copied) {
         PerfScope perfSubmit(PS_SUBMIT);
         bool sceneFrame = inRace && g_sceneDrawsThisFrame > 0;
@@ -1044,7 +1062,7 @@ static void SubmitFrameBody(IDirect3DDevice9* device)
                 g_vr.overlay->HideOverlay(g_vr.menuOverlay);
                 g_vr.menuOverlayShown = false;
             }
-            texture.handle = sharedCopied ? (void*)g_vr.sharedTexture11 : (void*)g_vr.frameTexture;
+            texture.handle = (void*)picture;
             VRTextureBounds_t leftBounds = {0.0f, 0.0f, 0.5f, 1.0f}, rightBounds = {0.5f, 0.0f, 1.0f, 1.0f};
             VRTextureBounds_t* bounds[2];
             if (g_cfg.stereo) {

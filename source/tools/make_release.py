@@ -4,7 +4,7 @@
     python tools/make_release.py            # uses source/d3d9.dll as it is (run build.bat nodeploy first)
 
 Contents: d3d9.dll (the build in source/), openvr_api.dll, openxr_loader.dll (32-bit, for [VR] Api=openxr), the small release ini
-(source/release/BlurVR.ini), README.md, install.bat, uninstall.bat, LICENSE_openvr.txt and LICENSE_openxr.txt.  No source code: that is in the repository
+(source/release/BlurVR.ini), README.md, install.bat, uninstall.bat, LICENSE_openvr.txt, LICENSE_openxr.txt and LICENSE_fsr.txt.  No source code: that is in the repository
 (tools/check_release_zip.py checks the finished zip).  Checks first: the release ini only has keys the code reads,
 with values that are valid; the DLL is not older than the sources.
 """
@@ -62,6 +62,7 @@ def main():
         (os.path.join(ROOT, 'uninstall.bat'), 'uninstall.bat'),
         (os.path.join(ROOT, 'LICENSE_openvr.txt'), 'LICENSE_openvr.txt'),
         (os.path.join(ROOT, 'LICENSE_openxr.txt'), 'LICENSE_openxr.txt'),
+        (os.path.join(ROOT, 'LICENSE_fsr.txt'), 'LICENSE_fsr.txt'),
     ]
     for path, _ in files:
         if not os.path.exists(path):

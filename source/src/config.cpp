@@ -156,6 +156,17 @@ void LoadConfig()
     g_cfg.menuHeight = ReadIniDouble("Menu", "HeightOffset", 0.0);
     g_cfg.adjustViewRot = ReadIniInt("Debug", "AdjustViewRotation", 1);
     g_cfg.sharedTransport = ReadIniInt("VR", "SharedTransport", 1, "Render");
+    g_cfg.upscale = g_cfg.vr ? ReadIniInt("VR", "Upscale", 0) : 0;
+    g_cfg.upscaleFactor = ReadIniDouble("VR", "UpscaleFactor", 1.5);
+    g_cfg.upscaleSharpness = ReadIniDouble("VR", "UpscaleSharpness", 0.75);
+    if (g_cfg.upscaleFactor < 1.0)
+        g_cfg.upscaleFactor = 1.0;
+    if (g_cfg.upscaleFactor > 4.0)
+        g_cfg.upscaleFactor = 4.0;
+    if (g_cfg.upscaleSharpness < 0.0)
+        g_cfg.upscaleSharpness = 0.0;
+    if (g_cfg.upscaleSharpness > 1.0)
+        g_cfg.upscaleSharpness = 1.0;
     g_cfg.perfEnabled = ReadIniInt("Perf", "Enabled", 0);
     g_cfg.keyPerf = ReadIniInt("Debug", "KeyPerf", 0x67);
     g_cfg.keyDump = ReadIniInt("Debug", "KeyDump", 0x68);
