@@ -9,7 +9,7 @@ Play Blur in a headset, seated. Built and tested with a Valve Index; any SteamVR
 
 [Watch the video](https://www.youtube.com/watch?v=9MuhK7FshBg) · [Download the latest release](https://github.com/TwoAyEm/BlurVR/releases)
 
-**Contents:** [What it does](#what-it-does) · [Requirements](#requirements) · [Install](#install) · [Resolution](#resolution) · [Graphics quality](#graphics-quality) · [Cockpit view](#cockpit-view) · [Keys](#keys) · [Settings](#settings) · [OpenXR](#openxr-optional) · [How it works](#how-it-works) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting) · [What is new](#what-is-new) · [License](#license)
+**Contents:** [What it does](#what-it-does) · [Requirements](#requirements) · [Install](#install) · [Resolution](#resolution) · [Upscaling](#upscaling) · [Graphics quality](#graphics-quality) · [Cockpit view](#cockpit-view) · [Keys](#keys) · [Settings](#settings) · [OpenXR](#openxr-optional) · [How it works](#how-it-works) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting) · [What is new](#what-is-new) · [License](#license)
 
 ## What it does
 
@@ -66,6 +66,14 @@ In VR, BlurVR replaces the game's resolution list (the monitor's 16:9 and 4:3 mo
 Your monitor has no such mode, so the game runs in a window (a window larger than your screens is normal); only the headset sees the picture. Bigger is sharper but heavier: start with the Vive-sized entry and go up while it stays smooth.
 
 In VR the size is kept in `BlurVR.ini` (`[VR] Resolution=WxH`): the game starts at it, even when Windows cannot make a window that big, and a size you pick in the game's video options is written there. The game's own settings (`settings.xml`) keep the size of the flat game, so with `Stereo=0` or `Enabled=0` it starts at your normal resolution again. BlurVR puts the flat size back when the game exits (and at the next start if the game was killed); the untouched file is copied to `settings.xml.blurvr-backup` beside it, and `BlurVR\display_backup.ini` holds the flat size.
+
+## Upscaling
+
+With `Upscale=1` under `[VR]` the game still renders at `Resolution`, and the headset gets a picture `UpscaleFactor` times as wide and high, made on the graphics card after the frame is drawn (an edge-adaptive upscale, the algorithm of AMD FidelityFX Super Resolution 1.0, and a sharpening whose strength is `UpscaleSharpness`). Races only; the menus and the desktop window are untouched.
+
+- **For a sharper picture:** keep your usual `Resolution` and set `UpscaleFactor` to 1.25 to 1.5. The headset then gets a larger picture to resample for its lenses, which looks clearer than the same render sent as it is. On the one machine measured (a Valve Index, the processor the limit in races), `Resolution=3584x2016` with `UpscaleFactor=1.5` (a 5376x3024 picture) cost about 2 frames per second.
+- **For speed:** render smaller and upscale back, for example `Resolution=2688x1512` with `UpscaleFactor=1.333` for a 3584x2016 picture. On the same machine this saved about 0.6 ms a frame (3 to 4 frames per second), because the smaller render is cheaper to copy; if the processor is the limit, lowering `Resolution` gives few frames and this will not give many either.
+- It does not add detail the game did not draw, and the HUD is enlarged with the picture, so its text softens a little. If the shaders cannot be compiled (the log says why), the picture goes on unscaled.
 
 ## Graphics quality
 
@@ -177,7 +185,7 @@ Blur counts how long a key is held in frames and, after a second, repeats it eve
 | `CockpitHudDistance`, `CockpitHudScale`, `CockpitHudOffsetY` | `1.2`, `0.6`, `0` | The HUD and the rear-view mirror with the cockpit view on: their distance in front of the seat in metres, their size (a fraction of one eye's width) and their height. They take the place of `Distance`, `Scale` and `OffsetY` under `[Hud]` in the cockpit view. |
 | `CockpitDriver` | `0` | 1 = the driver model is drawn in the cockpit view. 0 = hidden: his animation moves against the car and your head is inside him. |
 | `FpsCounter` | `0` | 1 = a small panel in the headset shows how many frames a second the game presents (in races and in the showroom; **Num9** switches it in game), with a graph of the last 18 seconds under it. It stays in front of your face, a little to the lower left, and is green at the headset's refresh rate, yellow below it and red far below (a game that SteamVR holds to half the headset's rate shows red; with `Api=openxr` the rate is the one the OpenXR runtime reports for its display). The line of the graph has the same colours and is scaled from the lowest to the highest rate of those seconds. Off by default |
-| `Upscale` | `0` | 1 = the game renders at `Resolution` and the headset gets a picture `UpscaleFactor` times as large, upscaled on the GPU (AMD FidelityFX Super Resolution 1.0 and a sharpening). Races only. It pays where the graphics card is the limit: if lowering `Resolution` does not raise the frame rate, the processor is the limit and this will not help |
+| `Upscale` | `0` | 1 = the game renders at `Resolution` and the headset gets a picture `UpscaleFactor` times as large, upscaled on the GPU (AMD FidelityFX Super Resolution 1.0 and a sharpening). Races only. See [Upscaling](#upscaling) |
 | `UpscaleFactor` | `1.5` | How many times as wide and high the headset picture is, 1 to 4. With `Resolution=2688x1512` and `1.333` the headset gets 3584x2016 |
 | `UpscaleSharpness` | `0.75` | The sharpening after the upscale: 0 = none, 1 = the strongest |
 
@@ -318,6 +326,10 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 
 - **Finer seat adjustment.** The seat keys (Num+ / Num-, Num\* / Num/, Num3 / Num1) move the seat by `CarSeatStep` under `[VR]` for each press, 2 cm by default (it was 5 cm, and a quick tap often gave two steps). A key held down starts repeating after a third of a second. Set `CarSeatStep` to 0.01 or 0.005 for the finest adjustment. The seat is kept for each car with three decimals.
 - **The cockpit seat is taken once the car moves**, as well as when the countdown is seen to end. In the first race after the game started the seat could wait up to a minute (the signs of the countdown are easy to miss there) and only then appear.
+
+**Upscaling (new)**
+
+- **New: `Upscale`, `UpscaleFactor` and `UpscaleSharpness` under `[VR]`.** The game renders at `Resolution` and the headset gets a larger picture, upscaled on the graphics card (AMD FidelityFX Super Resolution 1.0 and a sharpening), in races. Off by default. Rendering at 3584x2016 and upscaling by 1.5 gave a clearly crisper picture for about 2 frames per second on the test machine; rendering at 2688x1512 and upscaling by 1.333 to 3584x2016 was about 0.6 ms a frame faster than rendering 3584x2016. See [Upscaling](#upscaling).
 
 ### Version 1.8.3
 
