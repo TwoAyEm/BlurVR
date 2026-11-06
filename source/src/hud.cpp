@@ -22,7 +22,6 @@ int g_topVeilAlpha = 165;
 bool g_postBackdropToTopLayer = false;
 int g_lateBackdropDrops = 0;
 bool g_dimStrongRequested = false;
-bool g_dimStartWindow = false;
 bool g_dimRequested = false;
 bool g_menuDimLast = false;  // the last composed frame had the pause/results dim up
 bool g_menuGlowFrame = false; // this frame is a menu frame in the race (pause/results/restart): the UI's glow is wanted
@@ -691,10 +690,9 @@ void ComposeHudLayers(IDirect3DDevice9* device)
     g_lateBackdropDrops = 0;
     bool videoFrame = g_loadingVideoDropped;
     g_loadingVideoDropped = false;
-    bool wantDim = g_dimRequested && !videoFrame, dimWin = g_dimStartWindow, dimStrong = g_dimStrongRequested;
+    bool wantDim = g_dimRequested && !videoFrame, dimStrong = g_dimStrongRequested;
     g_menuDimLast = wantDim;
     g_dimRequested = false;
-    g_dimStartWindow = false;
     g_dimStrongRequested = false;
     if (IsMovieFrame()) {
         // a movie (tutorial video, cutscene) fills the screen; the game keeps drawing its menu UI under it, which must
@@ -710,9 +708,7 @@ void ComposeHudLayers(IDirect3DDevice9* device)
     if (!g_hudTexture || !g_hudStateBlock || !g_vr.poseValid || !IsRaceMode() || !g_cfg.stereo)
         return;
     g_dimTargetLevel =
-        wantDim ? (dimWin ? 0.5f
-                          : (dimStrong ? g_cfg.dimStrongPct * 0.01f * ((lateN >= 1 && lateN < 3) ? 0.6f : 1.f) : 0.3f))
-                : 0.f;
+        wantDim ? (dimStrong ? g_cfg.dimStrongPct * 0.01f * ((lateN >= 1 && lateN < 3) ? 0.6f : 1.f) : 0.3f) : 0.f;
     g_dimLevel += (g_dimTargetLevel - g_dimLevel) * (g_dimTargetLevel > g_dimLevel ? 0.5f : 0.35f);
     if (g_dimLevel < 0.01f)
         g_dimLevel = 0.f;

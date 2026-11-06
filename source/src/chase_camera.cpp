@@ -8,7 +8,8 @@
 #include "inline_hook.h"
 #include "vr_runtime.h"
 
-static void ApplySeatForKey();
+static void ApplySeatForKey(bool newCar = true);
+static void SaveRestOffset();
 
 namespace {
 
@@ -435,7 +436,7 @@ static void NoteCarModel()
         return;
     streak = 0;
     g_carKey = key;
-    ApplySeatForKey();
+    ApplySeatForKey(false); // (the car changed while racing: the rest offset waits for the next race, it must not move the seat now)
 }
 
 bool FindBody(const float* target, float* out, float* quat = NULL, bool* hasQuat = NULL)
@@ -627,7 +628,9 @@ void BodyAxes(const float* q, const BodyCandidate& c, double axes[3][3])
 // to the right in the car tested).  Measured while the car stands, in the car's own axes (so that it does not depend on which are taken for right, up and forward),
 // and added to the seat when the body is the origin, so that the seat is where it was tuned.
 double g_restOffset[3] = {0, 0, 0}; // the target against the body along the body's axes (right, up, forward)
-bool g_restValid = false;
+bool g_restValid = false;   // the offset is known (learned, or loaded for this car)
+bool g_restApplied = false; // ... and is added to the seat: not when it was learned after the car had driven (the seat would jump), then it waits for the next race
+bool g_restDriven = false;  // the car has driven (over 3 m/s) since its seat was set up
 
 const float* Origin(const RawPose& raw)
 {
@@ -664,8 +667,40 @@ static std::string SeatsPath()
     return std::string(g_modDir) + "BlurVR_seats.ini";
 }
 
-static void ApplySeatForKey()
+static void SaveRestOffset()
 {
+    if (!g_carKey)
+        return;
+    char section[32], text[32];
+    snprintf(section, sizeof(section), "car_%08x", g_carKey);
+    const char* names[3] = {"RestX", "RestY", "RestZ"};
+    for (int i = 0; i < 3; i++) {
+        snprintf(text, sizeof(text), "%.3f", g_restOffset[i]);
+        WritePrivateProfileStringA(section, names[i], text, SeatsPath().c_str());
+    }
+}
+
+static void ApplySeatForKey(bool newCar)
+{
+    // the rest offset of this car, if it was learned before (BlurVR_seats.ini): known and in use from the first frame, so that the seat is the same in every race
+    if (newCar) {
+        char section[32], text[3][32];
+        snprintf(section, sizeof(section), "car_%08x", g_carKey);
+        const char* names[3] = {"RestX", "RestY", "RestZ"};
+        bool all = true;
+        for (int i = 0; i < 3; i++) {
+            GetPrivateProfileStringA(section, names[i], "", text[i], sizeof(text[i]), SeatsPath().c_str());
+            all = all && text[i][0];
+        }
+        g_restDriven = false;
+        g_restValid = all;
+        g_restApplied = all;
+        if (all) {
+            for (int i = 0; i < 3; i++)
+                g_restOffset[i] = atof(text[i]);
+            Log("cockpit: car %08x: its rest offset %.3f %.3f %.3f is used", g_carKey, g_restOffset[0], g_restOffset[1], g_restOffset[2]);
+        }
+    }
     if (!g_defaultSeatKnown) {
         g_defaultSeat[0] = g_cfg.carSeatX;
         g_defaultSeat[1] = g_cfg.carSeatY;
@@ -910,7 +945,8 @@ bool CarSeatDelta(const double seat[3], Matrix4& cameraToSeat)
     const float* origin = Origin(raw);
     const double d[3] = {cam.pos[0] - origin[0], cam.pos[1] - origin[1], cam.pos[2] - origin[2]};
     const double distance = sqrt(Dot(d, d));
-    if (qlen < 0.9f || qlen > 1.1f || distance < 1.0 || distance > 40.0)
+    // (the camera's distance only tells a camera behind the car from another before the car's frame is locked; after that a cut at a respawn must not drop the seat)
+    if (qlen < 0.9f || qlen > 1.1f || (!g_locked && (distance < 1.0 || distance > 40.0)) || distance > 500.0)
         return false;
     if (!g_candidateCount)
         BuildCandidates();
@@ -1000,24 +1036,69 @@ bool CarSeatDelta(const double seat[3], Matrix4& cameraToSeat)
     // Where the car is: its body when the game's own way to it was found, else the chase camera's target.
     const double apartNow[3] = {raw.pos[0] - (raw.hasBody ? raw.body[0] : raw.pos[0]), raw.pos[1] - (raw.hasBody ? raw.body[1] : raw.pos[1]),
                                 raw.pos[2] - (raw.hasBody ? raw.body[2] : raw.pos[2])};
-    // (standing, and the target within a metre of the body: the target against the body, along the body's axes; further apart it is still catching up with a stop)
-    if (raw.hasBody && sqrt(Dot(g_velocity, g_velocity)) < 0.5 && Dot(apartNow, apartNow) < 1.0) {
-        // (along the BODY's axes, right / up / forward: this offset used to be turned with the chase camera object's own orientation, which is not the body's on
-        // bumps and in turns, so the seat swayed inside the car by the offset (about 0.45 m) times the angle between the two)
-        for (int k = 0; k < 3; k++) {
-            const double local = Dot(apartNow, axes[k]);
-            g_restOffset[k] = g_restValid ? 0.9 * g_restOffset[k] + 0.1 * local : local;
+    // The target against the body, along the body's axes (right / up / forward: turned with the chase camera object's own orientation it swayed with the angle between the
+    // two on bumps and in turns).  It is learned ONCE per car, after a moment of real standstill (body and target both still), and then kept: learned from any
+    // slower moment (a stop on the way into reverse, a respawn after a crash) it caught the target still catching up, and that error stayed in the seat, forward / back.
+    // It is kept in BlurVR_seats.ini with the car's seat (ApplySeatForKey loads it), and it is only switched on if the car has not driven yet: learned on a stop in the
+    // middle of a race (a car limping to a halt after heavy damage) it would move the seat by the offset (a third of a metre) at once, so it waits for the next race.
+    static ULONGLONG stillSince = 0;
+    static double stillBody[3], stillApart[3];
+    if (sqrt(Dot(g_velocity, g_velocity)) > 3.0)
+        g_restDriven = true;
+    if (raw.hasBody && !g_restValid && g_carKey) {
+        if (sqrt(Dot(g_velocity, g_velocity)) < 0.5 && Dot(apartNow, apartNow) < 1.0) {
+            const ULONGLONG now = GetTickCount64();
+            double drift = 0;
+            for (int i = 0; i < 3; i++)
+                drift = fmax(drift, fmax(fabs(raw.body[i] - stillBody[i]), fabs(apartNow[i] - stillApart[i])));
+            if (!stillSince || drift > 0.04) {
+                stillSince = now;
+                for (int i = 0; i < 3; i++) {
+                    stillBody[i] = raw.body[i];
+                    stillApart[i] = apartNow[i];
+                }
+            } else if (now - stillSince >= 700) {
+                for (int k = 0; k < 3; k++)
+                    g_restOffset[k] = Dot(apartNow, axes[k]);
+                g_restValid = true;
+                g_restApplied = !g_restDriven;
+                SaveRestOffset();
+                Log("cockpit: the seat's rest offset is learned for car %08x: right %.3f, up %.3f, forward %.3f m (%s)", g_carKey, g_restOffset[0], g_restOffset[1],
+                    g_restOffset[2], g_restApplied ? "used from now on" : "the car has driven already: used from the next race");
+            }
+        } else {
+            stillSince = 0;
         }
-        g_restValid = true;
     }
+    // The body is lost for a moment now and then (a respawn moves it before the target follows): the seat would jump to the target.  Carry the last body by the target's
+    // own movement instead, so that the two sources agree, and add the rest offset as with a found body.
+    static double goodBody[3], goodTarget[3];
+    static unsigned long long goodFrame = 0;
+    static bool goodValid = false;
+    if (raw.hasBody) {
+        for (int i = 0; i < 3; i++) {
+            goodBody[i] = raw.body[i];
+            goodTarget[i] = raw.pos[i];
+        }
+        goodFrame = g_vr.frameCount;
+        goodValid = true;
+    }
+    const bool carried = !raw.hasBody && goodValid && g_restValid && g_restApplied && g_cfg.carSeatBody && g_vr.frameCount <= goodFrame + 150;
+    double carriedBody[3];
+    if (carried)
+        for (int i = 0; i < 3; i++)
+            carriedBody[i] = goodBody[i] + (raw.pos[i] - goodTarget[i]);
+    const double* seatOrigin = carried ? carriedBody : NULL;
     double seatHere[3] = {seat[0], seat[1], seat[2]};
-    if (raw.hasBody && g_restValid) {
+    if ((raw.hasBody || carried) && g_restValid && g_restApplied) {
         for (int j = 0; j < 3; j++)
             seatHere[j] += g_restOffset[j];
     }
     double position[3];
-    for (int i = 0; i < 3; i++)
-        position[i] = origin[i] + axes[0][i] * seatHere[0] + axes[1][i] * seatHere[1] + axes[2][i] * seatHere[2];
+    for (int i = 0; i < 3; i++) {
+        const double base = seatOrigin ? seatOrigin[i] : origin[i];
+        position[i] = base + axes[0][i] * seatHere[0] + axes[1][i] * seatHere[1] + axes[2][i] * seatHere[2];
+    }
     static int bodyLogged = -1;
     if (bodyLogged != (raw.hasBody ? 1 : 0)) { // (once, and again if the body is lost or found)
         bodyLogged = raw.hasBody ? 1 : 0;

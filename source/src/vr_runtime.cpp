@@ -629,6 +629,8 @@ void VrUpdatePose()
     VrComposeSeat();
 }
 
+static unsigned g_raceRestarts = 0; // counted where a restarted race is detected (the scene gone behind the loading screen and back); the cockpit seat waits for the intro again
+
 void VrComposeSeat()
 {
     Matrix4 toSeat;
@@ -639,7 +641,11 @@ void VrComposeSeat()
     static unsigned goneAtStart = 0, hudAtStart = 0;
     static ULONGLONG raceStartMs = 0;
     const bool race = IsRaceMode() && !InMenuScene();
-    if (race && !wasRace) {
+    // (a retry has no level load, so the race never "begins" here: without this the seat taken in the first race stayed on through the retry's intro camera)
+    static unsigned seenRestarts = 0;
+    const bool restarted = seenRestarts != g_raceRestarts;
+    seenRestarts = g_raceRestarts;
+    if (race && (!wasRace || restarted)) {
         goneAtStart = RaceMenuGoneCount();
         hudAtStart = AiHudStartCount();
         raceStartMs = GetTickCount64();
@@ -942,6 +948,7 @@ static void SubmitFrameBody(IDirect3DDevice9* device)
                 Log("race restart detected (scene back after %d frames): intro window re-armed", noSceneFrames);
                 g_raceStartTime = GetTickCount64();
                 g_raceStartPhase = true;
+                g_raceRestarts++;
             }
             noSceneFrames = 0;
         }

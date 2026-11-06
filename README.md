@@ -1,4 +1,4 @@
-# BlurVR 1.8.2
+# BlurVR 1.8.3
 
 **Seated VR for Blur (SteamVR / OpenVR, or OpenXR).**
 
@@ -7,7 +7,7 @@ Play Blur in a headset, seated. Built and tested with a Valve Index; any SteamVR
 > [!NOTE]
 > Unofficial fan mod; not affiliated with the game's publisher or developer.
 
-[Watch the video](https://www.youtube.com/watch?v=-Gwqe6Wcjd8) · [Download the latest release](https://github.com/TwoAyEm/BlurVR/releases)
+[Watch the video](https://www.youtube.com/watch?v=9MuhK7FshBg) · [Download the latest release](https://github.com/TwoAyEm/BlurVR/releases)
 
 **Contents:** [What it does](#what-it-does) · [Requirements](#requirements) · [Install](#install) · [Resolution](#resolution) · [Graphics quality](#graphics-quality) · [Cockpit view](#cockpit-view) · [Keys](#keys) · [Settings](#settings) · [OpenXR](#openxr-optional) · [How it works](#how-it-works) · [Known limitations](#known-limitations) · [Troubleshooting](#troubleshooting) · [What is new](#what-is-new) · [License](#license)
 
@@ -80,13 +80,13 @@ Off by default. Set `CockpitView=1` under `[VR]` in `BlurVR.ini`, or press **Num
 - **The driver is hidden.** His animation moves against the car and your head is inside him. `CockpitDriver=1` shows him again.
 - **The HUD** (position, map, weapons) and the rear-view mirror sit in front of the seat, in the car: `CockpitHudDistance`, `CockpitHudScale` and `CockpitHudOffsetY` under `[VR]` set where and how big.
 - **The seat's place** starts at `CarSeatX`, `CarSeatY` and `CarSeatZ` under `[VR]` (metres right, up and forward of the point the chase camera follows). In a race with the cockpit view on, **Num+ / Num-** move it forward / back, **Num\* / Num/** up / down and **Num3 / Num1** right / left, 5 cm a step while the key is held. When you let go the place is kept for the car you are driving (in `BlurVR_seats.ini`) and used again every time you drive that car; a car without a kept place starts at the `CarSeat` values. Cars are told apart by the weight and inertia the game holds for them.
-- The cockpit view needs the game's chase camera code to be found in your `Blur.exe`. It was tried on the Steam build; on a build where it is not found the cockpit view is not available and the game keeps its normal camera (see [Troubleshooting](#troubleshooting)). It works only while the chase camera is the one in use: with the bumper camera or in a replay the view stays where the game's camera is.
+- The cockpit view needs the game's chase camera code to be found in your `Blur.exe`. It was tried on the Steam build; 1.8.1 and 1.8.2 changed how the car is found so that non-Steam builds should work too, which has not been seen in the game yet. On a build where it is not found the cockpit view is not available and the game keeps its normal camera (see [Troubleshooting](#troubleshooting)). The cockpit view has been confirmed working with Virtual Desktop's OpenXR runtime (VDXR) on a Quest 3, as well as with SteamVR on a Valve Index. It works only while the chase camera is the one in use: with the bumper camera or in a replay the view stays where the game's camera is.
 
 ## Keys
 
 | Key | What it does |
 |---|---|
-| **F9** | Recenter (sit comfortably, look straight ahead, press F9). This is SteamVR's own recentre, so recentering in SteamVR does the same. BlurVR also recenters at the start of every race (set `AutoRecenter=0` in `BlurVR.ini` to turn that off). |
+| **F9** | Recenter (sit comfortably, look straight ahead, press F9). With `Api=openvr` this is SteamVR's own recentre, so recentering in SteamVR does the same; with `Api=openxr` (since 1.6) it is BlurVR's own reference pose. BlurVR also recenters at the start of every race (set `AutoRecenter=0` in `BlurVR.ini` to turn that off). |
 | **F10** | Head tracking on/off (stereo image stays, camera stops following your head) |
 | **F8** | Mode override: AUTO → FORCE MENU → FORCE RACE. Use it if the mod picks the wrong mode. Flat (`Stereo=0`) it does the same job for the menu key repeat limit: AUTO → forced on → forced off. |
 | **Num0** | Cockpit view on/off, in a race (same as `CockpitView` in the ini; see [Cockpit view](#cockpit-view)) |
@@ -110,8 +110,8 @@ The mod has three states:
 
 > [!NOTE]
 > **Settings that moved** are read from their new place only. An older `BlurVR.ini` keeps working for `Stereo`, `ForceNoVSync`, `SharedTransport`, `DesktopView`, `DesktopPresentEvery` and `FitDesktopWindow` (still read from `[Render]`) and for `CustomWidth` / `CustomHeight` (read as `Resolution`).
-> `UiGlow`, `NoBloom`, `LoadingGlow`, `MaxFps`, `StartWidth`, `StartHeight` and `StartAtSavedSize` are gone, and `NoLensFlare` is only read from `[VR]`.
-> `Bloom` replaces `UiGlow`, `LoadingGlow` and `NoBloom` (`Bloom=0` is "no glow anywhere"). `ForceNoVSync=0` follows the display's refresh rate.
+> **Gone or replaced, and since which version:** `CustomWidth`, `CustomHeight`, `StartWidth`, `StartHeight` and `StartAtSavedSize` were replaced by `Resolution` in 1.4 (the two `Custom` keys are still read as `Resolution`). `UiGlow`, `NoBloom` and `LoadingGlow` were replaced by `Bloom` in 1.4 (`Bloom=0` is "no glow anywhere"). `MaxFps` (use V-Sync) and `OldVerticalTangents` with its Num9 key were removed in 1.4; Num9 is the FPS counter since 1.6. `HeadFrustum` under `[Culling]` was removed in 1.5 (the head frustum is always on in VR). `NoLensFlare` is only read from `[VR]` (since 1.4).
+> `ForceNoVSync=0` follows the display's refresh rate (its default changed to 0 in 1.4). `DesktopView` defaults to `off` since 1.5 (it was `left`). `DesktopView`, `ForceNoVSync` and `KeyRepeatMs` are no longer in the `BlurVR.ini` that comes with the mod since 1.5; their defaults are unchanged.
 
 ### `[General]`
 
@@ -255,7 +255,7 @@ BlurVR reaches the headset through SteamVR's OpenVR by default. Set `Api=openxr`
 - **The runtime needs a 32-bit build.** Blur is a 32-bit program and sees only the OpenXR runtime that is registered for 32-bit programs: the `ActiveRuntime` value in `HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Khronos\OpenXR\1` has to point to a runtime `.json` whose library is a 32-bit DLL. SteamVR registers one from version 2.17 (answer yes when it asks whether to make SteamVR the default OpenXR runtime). Whether another runtime has a 32-bit build is for its maker to say. A 32-bit `.json` that is not the registered one can be given in `OpenXRRuntime` under `[VR]`. OpenXR support is new: it has been tried with SteamVR's OpenXR runtime and a Valve Index, where it looked the same as OpenVR, and with Virtual Desktop's OpenXR runtime and a Pico 4 (see Runtimes below); other runtimes and headsets have not been tried. Please send `BlurVR.log` with any problem.
 - **If OpenXR cannot start** (no 32-bit runtime, no headset, a failed session) the game stays on the monitor and `BlurVR.log` (with `Log=1`) says why, in lines that start with `OpenXR:`. BlurVR does not switch to SteamVR's OpenVR by itself; set `Api=openvr` for that.
 - **What is the same:** races, the HUD, the mirror, the markers, the settings and the keys. **What differs:** the recentre key (F9, and the recentre at the start of every race) is BlurVR's own, because OpenXR has no way to ask the runtime to recentre (a recentre done in the runtime itself is followed too), and the floating menu screen is an OpenXR quad layer instead of a SteamVR overlay.
-- **Runtimes:** tried with SteamVR's OpenXR runtime on a Valve Index, and with Virtual Desktop's OpenXR runtime (VDXR) on a Pico 4 streamed from a PC with a Radeon RX 7600. Virtual Desktop's streamer folder has a 32-bit runtime file, `OpenXR\virtualdesktop-openxr-32.json`, and that run gave its path in `OpenXRRuntime` under `[VR]`. On the Pico 4 the menus and races ran, and with `MotionBlur=0` and `Reflections=0` a race held the headset's 72 frames a second at 3024x1680 (`SharedTransport` on). The game crashed there when a race ended and the showroom was about to load, until `Blur.exe` was patched to use more than 2 GB of memory (a "[4 GB patch](https://ntcore.com/4gb-patch/)", large address aware); after that two races in a row, the way back to the showroom and the exit went through cleanly.
+- **Runtimes:** tried with SteamVR's OpenXR runtime on a Valve Index, with Virtual Desktop's OpenXR runtime (VDXR) on a Quest 3 (the cockpit view was confirmed working there), and with VDXR on a Pico 4 streamed from a PC with a Radeon RX 7600. Virtual Desktop's streamer folder has a 32-bit runtime file, `OpenXR\virtualdesktop-openxr-32.json`, and that run gave its path in `OpenXRRuntime` under `[VR]`. On the Pico 4 the menus and races ran, and with `MotionBlur=0` and `Reflections=0` a race held the headset's 72 frames a second at 3024x1680 (`SharedTransport` on). The game crashed there when a race ended and the showroom was about to load, until `Blur.exe` was patched to use more than 2 GB of memory (a "[4 GB patch](https://ntcore.com/4gb-patch/)", large address aware); after that two races in a row, the way back to the showroom and the exit went through cleanly.
 - `openxr_loader.dll` in the `BlurVR` folder is the 32-bit OpenXR loader of the Khronos Group (see `LICENSE_openxr.txt`).
 
 ## How it works
@@ -277,7 +277,7 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - Menus are the game image on a flat screen; use mouse/keyboard/controller as normal.
 - The markers over the AI cars were tried on the Steam build and on a non-Steam build; with another build of the game they may stay on the HUD panel. A popup in the middle of the screen can take a piece of itself along with a marker, and a lock-on reticle or rival arrow further from the marker than its picture reaches is cut off.
 - By default (`DesktopView=off`) the window on the desktop only says "Playing in VR", but it is still the game's window: closing it quits the game, and **the keyboard and the gamepad go to the game only while that window has the focus**, so click it once after the game has started (it says so under "Playing in VR"). With `left` or `right` it is a mirror of one eye, cropped to the window's shape; it is not the headset's full view.
-- The cockpit view hides the driver, so there are no hands on the wheel, and it is fixed to the car's body: bumps and landings move the whole view, which is what the car does. It was tried on the Steam build only.
+- The cockpit view hides the driver, so there are no hands on the wheel, and it is fixed to the car's body: bumps and landings move the whole view, which is what the car does. It was tried on the Steam build only (non-Steam builds: see 1.8.1 and 1.8.2 under [What is new](#what-is-new)).
 - The menu key repeat limit is also on while a race loads and during its countdown (BlurVR sees the same full-screen fill there), so a key held down through the start reaches the game as taps until the countdown ends.
 
 ## Troubleshooting
@@ -293,6 +293,19 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **To run the game flat,** set `Stereo=0` (SteamVR is not used; the `[Display]` and `[Input]` settings still apply), or `Enabled=0` (the mod does nothing), or run `uninstall.bat`.
 
 ## What is new
+
+### Version 1.8.3
+
+**Cockpit view: steadier when reversing and after a crash**
+
+- **No more forward / back shift of the seat after reversing.** The small offset between the camera's target and the car's body was relearned at every stop, including the moment the car stops before it reverses, when the target is still catching up. It is now learned once per car, while the car stands still at the start of a race, and kept for that car in `BlurVR_seats.ini`. It is never switched on in the middle of a race, so a car that limps to a halt after heavy damage no longer makes the view jump.
+- **No jump when the car is reset after a crash.** When the car's body is lost for a moment (the car is put back on the road), the seat follows the last known body position moved with the camera's target instead of jumping to the target. A camera cut at the reset also no longer drops the view back to the chase camera.
+- **A retry no longer takes the cockpit seat early.** After the end of a race, choosing Retry has no level load, so the seat taken in the first race stayed on and locked onto the car while the game was still showing the new race's intro camera. A retry is now treated like a new race: the intro camera runs as the game shows it and the seat is taken when the countdown starts.
+- **The race intro is no longer dimmed.** The picture sometimes went dark for a moment during the intro, when the game drew its dimmed copy of the scene. The countdown now always shows on the plain scene; the dim behind the pause and results menus is unchanged (`DimStrongPct`).
+
+**Bloom**
+
+- **`Bloom` is now applied to every loading screen.** The glow of the very first loading screen (before the game opened its first level) and of the loading screen after restarting an event was drawn at full strength whatever `Bloom` was set to, and looked over-bright; both now follow `Bloom` like the other screens.
 
 ### Version 1.8.2
 
@@ -317,20 +330,27 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - New settings under `[VR]`: `CockpitView`, `CarSeatX`, `CarSeatY`, `CarSeatZ`, `CockpitHudDistance`, `CockpitHudScale`, `CockpitHudOffsetY`, `CockpitDriver`; under `[Debug]`: `KeyCockpit`. New file `BlurVR_seats.ini` in the `BlurVR` folder (the seats kept for each car).
 - Tried on the Steam build only. Without the game's chase camera code found in `Blur.exe` the cockpit view is not available and the game keeps its normal camera.
 
-### Version 1.7.1c
+<details>
+<summary><b>Version 1.7.1c</b></summary>
 
 **Other builds of the game**
 
 - **The head frustum now works on the 1.0 build of the game with rewritten code.** 1.7.1b found the game's `SetCamera` on that build through the calls to `SetCameraData`, but then refused it: the code had moved the load of the size of the camera description out of line (a jump to a block that loads it and jumps back), and the check did not follow the jump. It does now. Checked on that build's `Blur.exe` with `tools/camera_sig_check.py`; not yet seen in the game.
 
-### Version 1.7.1b
+</details>
+
+<details>
+<summary><b>Version 1.7.1b</b></summary>
 
 **Other builds of the game**
 
 - **A build whose code was rewritten gets the head frustum too.** Some non-Steam builds of the game have a few percent of their functions moved and rewritten (the function's address holds a jump to a copy with extra instructions in it). On one such build, from a user's log, BlurVR found the game's `SetCameraData` by its bytes but not `SetCamera`, so the game kept culling with its own frustum (`the camera code was not found` in `BlurVR.log`). BlurVR now also looks for `SetCamera` through the calls to `SetCameraData` and, when it finds it behind a jump, hooks the jump instead of the function; the function is checked against its instructions before anything is changed. This was tried on test builds made for it and has not been seen yet on that user's build. Builds that worked before are found as before.
 - **When the camera code is still not found, the `game camera:` line says what was seen:** which calls were looked at and the first bytes of the function there. That line and the whole `BlurVR.log` are what to send.
 
-### Version 1.7.1
+</details>
+
+<details>
+<summary><b>Version 1.7.1</b></summary>
 
 **Rear-view mirror**
 
@@ -340,7 +360,10 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 
 - **The game's own quality setting is the preferred way to trade picture quality for frame rate** (see [Graphics quality](#graphics-quality)): it adjusts the reflections and the shadows, among other things, and a Valve Index held 90 frames a second at 3584x2016 on its lowest level. `Reflections` and `NoLensFlare` under `[VR]` are kept for now but may be removed in a later version.
 
-### Version 1.7
+</details>
+
+<details>
+<summary><b>Version 1.7</b></summary>
 
 **Motion blur**
 
@@ -365,7 +388,10 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - New host check in `source\tools`: `motion_blur_check.py` checks the motion blur (the matrix of each eye against a calculation, and the switch on a real Direct3D 9 device).
 - `hotpath_check.py` and `reflection_cull_check.py` in `source\tools` now also check the showroom's reflection: that its picture is found from its camera and drawn once for each eye, and that the game's clip plane for it follows each eye.
 
-### Version 1.6
+</details>
+
+<details>
+<summary><b>Version 1.6</b></summary>
 
 **OpenXR (optional)**
 
@@ -390,7 +416,10 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 
 - The OpenXR headers are in `source\third_party\openxr`, the code is in `source\src\openxr_runtime.cpp` (`source\NOTES.md`, section 27), and `build.bat` and `build.sh` need nothing new. New host checks in `source\tools`: `openxr_check.py` tests the loader and the runtime without the game (with `--system` it also starts the runtime and runs frames of a test picture in the headset), and `fps_counter_check.py` checks the FPS counter (counting, colours, the panel on a real Direct3D 9 device).
 
-### Version 1.5
+</details>
+
+<details>
+<summary><b>Version 1.5</b></summary>
 
 **Races**
 
@@ -417,7 +446,10 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 - **The flat display mode is put back when the game exits.** In 1.4 this only happened at the next start: Blur ends with `TerminateProcess`, which skipped BlurVR's exit code, so after every VR run `settings.xml` still held the VR size and `BlurVR.log` began with "the last VR run did not end properly". BlurVR now hooks that call and restores the flat size first (a game that is killed from outside is still repaired at the next start).
 - Building from source needs `-lgdi32` (the message window is drawn with GDI); `build.bat` and `build.sh` have it. New host checks in `source\tools`: `ai_hud_check.py`, `desktop_message_check.py`, `exit_restore_check.py` and `reflection_cull_check.py`.
 
-### Version 1.4
+</details>
+
+<details>
+<summary><b>Version 1.4</b></summary>
 
 **Menus**
 
@@ -442,6 +474,8 @@ Source code: [github.com/TwoAyEm/BlurVR](https://github.com/TwoAyEm/BlurVR). Sta
 **Other**
 
 - The BSD 3-Clause licence is included ([License](#license)), and this readme is now `README.md`.
+
+</details>
 
 <details>
 <summary><b>Version 1.3</b></summary>

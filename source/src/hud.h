@@ -17,7 +17,6 @@ extern int g_topVeilAlpha;
 extern bool g_postBackdropToTopLayer;
 extern int g_lateBackdropDrops;
 extern bool g_dimStrongRequested;
-extern bool g_dimStartWindow;
 extern bool g_dimRequested;
 extern bool g_menuDimLast;
 extern bool g_menuGlowFrame;

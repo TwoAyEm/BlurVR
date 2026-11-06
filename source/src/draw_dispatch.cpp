@@ -321,6 +321,28 @@ static int ClassifyDraw(IDirect3DDevice9* device)
 // these keep arriving (they stop the moment the player skips the lead-in)
 static unsigned long long g_lastIntroPieceTime = 0;
 
+// The first seconds of a race (the intro camera and the countdown; also after a retry, which re-arms g_raceStartTime): nothing is dimmed or veiled then, whatever the
+// game draws over the picture.  Pausing is not possible before the race runs.
+static bool RaceIntroWindow()
+{
+    return g_raceStartTime && GetTickCount64() - g_raceStartTime < 25000;
+}
+
+// (Log=1) which draw asked for a dim or a veil in a race, with what was bound and how much of the screen it covered: at most one line a second, so that a veil seen
+// in a race (damage, an effect) can be traced to its draw
+static void NoteRaceDim(const char* path, unsigned width, unsigned height, double coverage)
+{
+    static unsigned long long lastMs = 0;
+    static int count = 0;
+    const unsigned long long now = GetTickCount64();
+    if (!g_logEnabled || count >= 80 || now - lastMs < 1000)
+        return;
+    lastMs = now;
+    count++;
+    Log("race dim: %s (texture %ux%u, coverage %.2f, %d HUD draws, %.1f s after the race start, UI used %d)", path, width, height, coverage, g_hudDrawsThisFrame,
+        g_raceStartTime ? (double)(now - g_raceStartTime) / 1000.0 : -1.0, g_hudUsed ? 1 : 0);
+}
+
 // One of the game's own glow draws (additive, ONE / ONE) at pct % of its strength.  The blend factor scales what is added, up to
 // 100 %; above that the draw is repeated for the rest.  0 drops it.
 static HRESULT DrawGlowAtStrength(IDirect3DDevice9* device, const DrawCall& draw, int pct)
@@ -482,11 +504,23 @@ void RaceMenuOverlayEndFrame()
     }
 }
 
+// (Log=1) which of the three places the game's glow is taken in, logged when it changes: the same Bloom value is applied in each, and this says which screen went through which
+static void NoteBloomPath(const char* path)
+{
+    static const char* last = NULL;
+    if (path == last || !g_logEnabled)
+        return;
+    last = path;
+    Log("bloom: %s (Bloom=%d%%), level \"%s\"", path, g_cfg.bloomPct, g_currentLevel);
+}
+
 HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
 {
     PerfDrawScope perf(device);
     RaceMenuMeasure raceMenuMeasure(device);
-    if (g_cfg.bloomPct != 100 && g_levelLoading && g_levelFilesSeen && !IsRaceMode() && g_renderTarget0 &&
+    // (g_levelLoading is true from the start, so the screens before the first level is opened - the game's start-up and its first menus - are covered too)
+    // (a restarted race has no level load: its loading screen is a frame of the race with no scene drawn in it)
+    if (g_cfg.bloomPct != 100 && ((g_levelLoading && !IsRaceMode()) || (IsRaceMode() && g_sceneDrawsThisFrame == 0)) && g_renderTarget0 &&
         g_renderTarget0 == g_backBufferSurface && g_boundTextures[0] &&
         g_boundTextures[0]->GetType() == D3DRTYPE_TEXTURE && g_renderTargetTextures.count((void*)g_boundTextures[0])) {
         // the loading screen's glow: a small blurred copy of the picture added over the whole screen.  Bloom scales it like the glow of the
@@ -500,6 +534,7 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
         if (blend && src == D3DBLEND_ONE && dest == D3DBLEND_ONE &&
             SUCCEEDED(((IDirect3DTexture9*)g_boundTextures[0])->GetLevelDesc(0, &glowDesc)) &&
             glowDesc.Width * 4 <= g_backBufferWidth) {
+            NoteBloomPath(IsRaceMode() ? "restart loading screen glow, scaled as drawn" : "loading screen glow, scaled as drawn");
             return DrawGlowAtStrength(device, draw, g_cfg.bloomPct);
         }
     }
@@ -524,6 +559,7 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
         D3DSURFACE_DESC gd;
         if (ab && sb == D3DBLEND_ONE && db == D3DBLEND_ONE &&
             SUCCEEDED(((IDirect3DTexture9*)g_boundTextures[0])->GetLevelDesc(0, &gd)) && gd.Width * 8 < g_backBufferWidth) {
+            NoteBloomPath("race UI glow, added over the UI layers");
             NoteSceneBloom(g_boundTextures[0]);
             return D3D_OK;
         }
@@ -536,6 +572,7 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
         D3DSURFACE_DESC bd;
         if (SUCCEEDED(((IDirect3DTexture9*)g_boundTextures[1])->GetLevelDesc(0, &bd)) && bd.Width * 5 > g_backBufferWidth &&
             bd.Width * 3 < g_backBufferWidth && g_cfg.bloomPct > 0 && g_renderTarget0 == g_backBufferSurface) {
+            NoteBloomPath("showroom UI glow, added over the UI layers");
             NoteSceneBloom(g_boundTextures[1]); // the UI's glow buffer, in the UI's own full-screen layout
             return D3D_OK;                      // (the UI and glow stretched over both eyes: they go onto our layers)
         }
@@ -755,8 +792,12 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
                 if (surfaceDesc.Width >= g_backBufferWidth * 0.9 && surfaceDesc.Height >= g_backBufferHeight * 0.9) {
                     g_backdropDropTime = GetTickCount64();
                     if (strcmp(g_currentLevel, "showroom") != 0) {
-                        g_dimRequested = true;
-                        g_dimStrongRequested = true;
+                        // (not during the race-start intro: the copy is dropped and the countdown shows on the plain scene)
+                        if (!RaceIntroWindow()) {
+                            NoteRaceDim("copy of the scene", surfaceDesc.Width, surfaceDesc.Height, 1.0);
+                            g_dimRequested = true;
+                            g_dimStrongRequested = true;
+                        }
                     } else if (g_sceneCompositeDrawn)
                         g_postBackdropToTopLayer = true; /* menu: what the game draws after its backdrop copy (button
                                                             hints of a popup) belongs above the dim */
@@ -835,15 +876,17 @@ HRESULT RunDraw(IDirect3DDevice9* device, const DrawCall& draw)
                 g_backdropDropTime = GetTickCount64();
                 if (known && inWin)
                     g_lastIntroPieceTime = g_backdropDropTime;
-                if (known && inRace && !inWin && frac >= 0.6 && g_hudUsed) {
+                if (known && inRace && !inWin && frac >= 0.6 && !RaceIntroWindow() && g_hudUsed) {
+                    NoteRaceDim("veil over the UI", cw, ch, frac);
                     g_lateUiToTopLayer = true;
                     g_topVeilRequested = true;
                     g_lateBackdropDrops++;
                     g_topVeilAlpha = g_lateBackdropDrops >= 3 ? g_cfg.veilRace : g_cfg.veilResultsScreen;
                 } // 3+ covering fills = a popup on top of the results; 2 = just the results screen's own backdrop   //
                   // dim drawn over the UI built so far: what follows (menu panel) must stay above it
-                else if (known && inRace && !inWin && frac >= 0.6) {
-                    // (the race-start intro pieces no longer dim the view: the countdown shows on the plain scene)
+                else if (known && inRace && !inWin && frac >= 0.6 && !RaceIntroWindow()) {
+                    // (the race-start intro pieces do not dim the view: the countdown shows on the plain scene)
+                    NoteRaceDim("fill", cw, ch, frac);
                     g_dimRequested = true;
                     if (g_hudDrawsThisFrame >= 15)
                         g_dimStrongRequested = true;
