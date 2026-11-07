@@ -104,6 +104,22 @@ Off by default. Set `CockpitView=1` under `[VR]` in `BlurVR.ini`, or press **Num
 | **Num8** | Save what the headset sees as picture files (see [Troubleshooting](#troubleshooting)) |
 | **Num9** | FPS counter on/off (same as `FpsCounter` in the ini) |
 
+> [!TIP]
+> **Changing a key.** `RecenterKey`, `ToggleKey` and `ModeKey` under `[General]`, and the `Key...` settings under `[Debug]`, take a Windows virtual-key code written in hex, for example `RecenterKey=0x20` for the space bar. Edit `BlurVR.ini` with the game closed.
+>
+> | Key | Code | Key | Code |
+> |---|---|---|---|
+> | Space | `0x20` | F1 – F12 | `0x70` – `0x7B` |
+> | Enter | `0x0D` | A – Z | `0x41` – `0x5A` |
+> | Esc | `0x1B` | 0 – 9 (top row) | `0x30` – `0x39` |
+> | Tab | `0x09` | Numpad 0 – 9 | `0x60` – `0x69` |
+> | Backspace | `0x08` | Left Shift / Right Shift | `0xA0` / `0xA1` |
+> | Insert / Delete | `0x2D` / `0x2E` | Left Ctrl / Right Ctrl | `0xA2` / `0xA3` |
+> | Home / End | `0x24` / `0x23` | Left Alt / Right Alt | `0xA4` / `0xA5` |
+> | Page Up / Page Down | `0x21` / `0x22` | Arrow keys (left, up, right, down) | `0x25` `0x26` `0x27` `0x28` |
+>
+> The game reads the same keys, so pick one it does not use. Microsoft lists every code under "Virtual-Key Codes".
+
 ## Settings
 
 `BlurVR.ini` holds only the options most people need (the mode, resolution, shared transport, desktop window). Every option is listed below; add a line under its `[section]` in `BlurVR.ini` to use it (keys left out use the default shown). Edit with the game closed. Delete `BlurVR.ini` to go back to all defaults.
